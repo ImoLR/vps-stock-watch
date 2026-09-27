@@ -247,16 +247,18 @@ Provider 数量、各 Provider 最近检查/成功时间、商品数、有货数
 
 `/stock` 只读取最近成功扫描写入的 JSON state，不调用 Provider、不发起商城请求，也不
 启动 Chromium。首页按当前 state 实时显示六个 Provider 的可购买数量；进入 Provider 后
-每页显示 5 个商品，并提供上一页、下一页和返回按钮。刷新只重新读取磁盘 state。
+按 state 中保存的真实分类列出全部当前可购买商品。每行只显示名称、价格/周期和直达
+链接；长目录会自动拆成连续消息，优先在分类之间拆分，只有最后一条消息提供返回按钮。
+刷新只重新读取磁盘 state。
 
 商品的正常/隐藏属性来自 `metadata.discovery`，不按名称猜测：catalog/API/官网导航发现的
 商品标记为“正常库存”，`extra_product_urls`、`extra_pids` 等补充入口标记为“隐藏库存”。
-隐藏库存优先排序。Blossom 的 ISP/Metal `notification_suppressed` 只控制主动通知，不影响
-`/stock`，只要当前有货仍按正常库存显示。FACHOST Product 22 因来自
+隐藏库存统一放在正常库存之后。Blossom 的 ISP/Metal `notification_suppressed` 只控制主动
+通知，不影响 `/stock`，只要当前有货仍按正常库存显示。FACHOST Product 22 因来自
 `extra_product_urls`，当前有货时显示为隐藏库存。
 
-如果存在具体正整数库存则显示数字；没有数字但 `available=true` 时只显示“有货”，不会
-伪造成库存 1。最近成功时间超过当前 Provider 扫描间隔两倍时会提示数据可能过期，但仍
+可购买筛选仍严格使用正整数库存或 `available=true`，不会把布尔库存伪造成具体数量。
+最近成功时间超过当前 Provider 扫描间隔两倍时会提示数据可能过期，但仍
 保留最后一次成功库存。命令消息和每一次 callback 都重新校验管理员 chat 与 sender。
 
 扫描间隔菜单分别显示 NexKr、DMIT、Blossom Host、BOILCLOUD、FACHOST 和 LeiKwanHost 的当前有效间隔。管理员选择商家后

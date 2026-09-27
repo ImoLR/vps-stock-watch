@@ -15,6 +15,7 @@ from watcher.telegram import (
     STOCK_MENU_CALLBACK,
     STOCK_PROVIDER_PREFIX,
     available_products,
+    format_change,
     format_stock_provider,
     is_currently_available,
     is_hidden_inventory,
@@ -36,16 +37,19 @@ def product(
     hidden=False,
     notification_suppressed=False,
     source=None,
+    category="VPS",
+    price="$10 USD",
+    billing_cycle="monthly",
 ):
     source = source or ("extra_product_urls" if hidden else "catalog")
     return Product(
         provider=provider,
         product_id=str(product_id),
         name=name or "%s plan %s" % (provider, product_id),
-        category="VPS",
+        category=category,
         region="Test Region",
-        price="$10 USD",
-        billing_cycle="monthly",
+        price=price,
+        billing_cycle=billing_cycle,
         stock=stock,
         available=available,
         url="https://example.test/buy/%s/%s" % (provider, product_id),
@@ -184,34 +188,44 @@ class StockQueryTests(unittest.TestCase):
                 }
             }
         }
-        text, _page, _pages = format_stock_provider(
+        messages = format_stock_provider(
             state,
             "x",
             60,
-            0,
             now=datetime(2026, 9, 27, 12, 0, 30, tzinfo=timezone.utc),
         )
-        self.assertIn("库存：有货", text)
-        self.assertNotIn("\n库存：1\n", text)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("x plan 4 · $10 USD/月", messages[0])
+        self.assertNotIn("库存：", messages[0])
 
-    def test_product_page_shows_numeric_stock_provenance_and_purchase_url(self):
+    def test_provider_list_is_compact_grouped_and_keeps_hidden_after_normal(self):
         self.save_products(
             "fachost",
             [
-                product("fachost", "1", stock=3),
-                product("fachost", "22", name="Hinet-VDS-Lite", hidden=True),
+                product("fachost", "1", stock=3, category="Cloud VPS"),
+                product(
+                    "fachost",
+                    "22",
+                    name="Hinet-VDS-Lite",
+                    hidden=True,
+                    category="TW-Hinet-VDS",
+                ),
             ],
         )
         self.app.send_stock_provider("fachost")
         text, _markup = self.app.telegram.sent[-1]
+        self.assertEqual(text.count("🟢 正常库存"), 1)
         self.assertIn("🟢 正常库存", text)
         self.assertIn("🕵️ 隐藏库存", text)
-        self.assertIn("库存：3", text)
+        self.assertLess(text.index("🟢 正常库存"), text.index("🕵️ 隐藏库存"))
+        self.assertIn("【Cloud VPS】", text)
+        self.assertIn("【TW-Hinet-VDS】", text)
         self.assertIn("Hinet-VDS-Lite", text)
-        self.assertIn("ID / PID：22", text)
         self.assertIn('href="https://example.test/buy/fachost/22"', text)
-        self.assertIn("🟢 正常库存：1", text)
-        self.assertIn("🕵️ 隐藏库存：1", text)
+        self.assertIn("🕵️ 其中隐藏库存：1", text)
+        for forbidden in ("地区：", "ID / PID", "discovery"):
+            self.assertNotIn(forbidden, text)
+        self.assertNotIn("\n库存：", text)
 
     def test_hidden_detection_is_provenance_based_not_pid_or_name(self):
         normal_22 = product("fachost", "22", name="hidden old lite", hidden=False).to_dict()
@@ -231,6 +245,7 @@ class StockQueryTests(unittest.TestCase):
             "isp-xs",
             stock=3,
             notification_suppressed=True,
+            category="🏡 ISP Line — Washington/Verizon or Seattle/Astound",
         )
         isp.metadata["family"] = "isp"
         metal = product(
@@ -238,17 +253,24 @@ class StockQueryTests(unittest.TestCase):
             "metal-1",
             stock=2,
             notification_suppressed=True,
+            category="Bare metal — dedicated physical servers",
         )
         metal.metadata["family"] = "metal"
         self.save_products("blossom", [isp, metal])
         shown = available_products(self.app.store.provider("blossom"))
         self.assertEqual({item["product_id"] for item in shown}, {"isp-xs", "metal-1"})
         self.assertTrue(all(not is_hidden_inventory(item) for item in shown))
+        rendered = "\n".join(
+            format_stock_provider(self.app.store.snapshot(), "blossom", 60)
+        )
+        self.assertIn("【🏡 ISP Line — Washington/Verizon or Seattle/Astound】", rendered)
+        self.assertIn("【Bare metal — dedicated physical servers】", rendered)
+        self.assertNotIn("🕵️ 隐藏库存", rendered)
         provider = next(item for item in self.app.providers if item.name == "blossom")
         self.assertFalse(provider.should_notify(Change(ChangeType.STOCK, isp, old=isp)))
         self.assertFalse(provider.should_notify(Change(ChangeType.STOCK, metal, old=metal)))
 
-    def test_hidden_inventory_sorts_before_normal_inventory(self):
+    def test_available_products_sort_normal_inventory_before_hidden(self):
         self.save_products(
             "fachost",
             [
@@ -257,35 +279,92 @@ class StockQueryTests(unittest.TestCase):
             ],
         )
         shown = available_products(self.app.store.provider("fachost"))
-        self.assertEqual([item["product_id"] for item in shown], ["2", "1"])
+        self.assertEqual([item["product_id"] for item in shown], ["1", "2"])
 
-    def test_pagination_is_five_per_page_with_next_previous_and_back(self):
-        products = [product("dmit", str(index), name="Plan %02d" % index) for index in range(1, 8)]
-        products[-1].metadata["discovery"] = {
-            "type": "extra_pid",
-            "hidden": True,
-            "source": "extra_pids",
-        }
+    def test_long_catalog_is_sent_as_consecutive_chunks_with_only_final_back_button(self):
+        products = [
+            product(
+                "dmit",
+                str(index),
+                name="Plan %02d with a deliberately descriptive product name" % index,
+                category="Category %02d" % ((index - 1) // 3),
+            )
+            for index in range(1, 16)
+        ]
         self.save_products("dmit", products)
-        state = self.app.store.snapshot()
-        first, page, pages = format_stock_provider(state, "dmit", 60, 0)
-        self.assertEqual((page, pages), (0, 2))
-        self.assertEqual(first.count("🛒 购买 / 查看商品"), 5)
-        self.assertLess(first.index("Plan 07"), first.index("Plan 01"))
-        first_markup = stock_provider_markup("dmit", page, pages)
-        self.assertEqual(first_markup["inline_keyboard"][0][0]["text"], "下一页 →")
+        with patch("watcher.app.format_stock_provider") as formatter:
+            formatter.return_value = ["chunk one (1/2)", "chunk two (2/2)"]
+            self.app.send_stock_provider("dmit")
+        self.assertEqual(
+            self.app.telegram.sent,
+            [
+                ("chunk one (1/2)", None),
+                ("chunk two (2/2)", stock_provider_markup()),
+            ],
+        )
 
-        second, page, pages = format_stock_provider(state, "dmit", 60, 1)
-        self.assertEqual((page, pages), (1, 2))
-        self.assertEqual(second.count("🛒 购买 / 查看商品"), 2)
-        second_markup = stock_provider_markup("dmit", page, pages)
-        self.assertEqual(second_markup["inline_keyboard"][0][0]["text"], "← 上一页")
-        self.assertEqual(second_markup["inline_keyboard"][-1][0]["text"], "← 返回网站列表")
+    def test_chunker_keeps_categories_whole_before_splitting_product_lines(self):
+        products = [
+            product("dmit", "1", name="A one", category="Alpha"),
+            product("dmit", "2", name="A two", category="Alpha"),
+            product("dmit", "3", name="B one", category="Beta"),
+            product("dmit", "4", name="B two", category="Beta"),
+        ]
+        self.save_products("dmit", products)
+        messages = format_stock_provider(
+            self.app.store.snapshot(), "dmit", 60, max_length=500
+        )
+        self.assertEqual(len(messages), 2)
+        rendered = "\n".join(messages)
+        self.assertEqual(rendered.count("【Alpha】"), 1)
+        self.assertEqual(rendered.count("【Beta】"), 1)
+        self.assertNotIn("· 续】", rendered)
+        self.assertIn("(1/2)", messages[0])
+        self.assertIn("(2/2)", messages[1])
+        self.assertNotIn("上一页", rendered)
+        self.assertNotIn("下一页", rendered)
+        self.assertNotIn("第 ", rendered)
+        self.assertTrue(all(len(message) <= 500 for message in messages))
+
+    def test_oversized_category_splits_only_between_lines_and_repeats_continuation(self):
+        products = [
+            product(
+                "leikwanhost",
+                str(index),
+                name="Long plan %02d with enough text to force another message" % index,
+                category="One Real Category",
+            )
+            for index in range(1, 9)
+        ]
+        self.save_products("leikwanhost", products)
+        messages = format_stock_provider(
+            self.app.store.snapshot(), "leikwanhost", 60, max_length=430
+        )
+        self.assertGreater(len(messages), 1)
+        rendered = "\n".join(messages)
+        self.assertIn("【One Real Category · 续】", rendered)
+        for index, message_text in enumerate(messages, 1):
+            self.assertIn("(%d/%d)" % (index, len(messages)), message_text)
+        for index in range(1, 9):
+            self.assertEqual(rendered.count("Long plan %02d" % index), 1)
+        self.assertTrue(all(len(message) <= 430 for message in messages))
+
+    def test_all_six_providers_use_their_saved_category_labels(self):
+        for index, name in enumerate(PROVIDER_NAMES, 1):
+            category = "Saved category %d" % index
+            self.save_products(
+                name,
+                [product(name, str(index), category=category, stock=1)],
+            )
+            rendered = "\n".join(
+                format_stock_provider(self.app.store.snapshot(), name, 60)
+            )
+            self.assertIn("【%s】" % category, rendered)
 
     def test_provider_page_callbacks_and_return_work(self):
         self.seed_all_providers()
         self.app.process_update(callback(STOCK_PROVIDER_PREFIX + "fachost:0"))
-        self.assertIn("FACHOST 当前可购买库存", self.app.telegram.sent[-1][0])
+        self.assertIn("FACHOST 当前库存", self.app.telegram.sent[-1][0])
         self.app.process_update(callback(STOCK_MENU_CALLBACK))
         self.assertIn("当前可购买库存", self.app.telegram.sent[-1][0])
 
@@ -340,25 +419,23 @@ class StockQueryTests(unittest.TestCase):
                 }
             }
         }
-        fresh, _page, _pages = format_stock_provider(
+        fresh = format_stock_provider(
             state,
             "nexkr",
             60,
-            0,
             now=datetime(2026, 9, 27, 12, 1, 59, tzinfo=timezone.utc),
-        )
-        stale, _page, _pages = format_stock_provider(
+        )[0]
+        stale = format_stock_provider(
             state,
             "nexkr",
             60,
-            0,
             now=datetime(2026, 9, 27, 12, 2, 1, tzinfo=timezone.utc),
-        )
+        )[0]
         self.assertNotIn("数据可能已过期", fresh)
         self.assertIn("⚠️ 数据可能已过期", stale)
 
     def test_single_page_has_only_back_button(self):
-        markup = stock_provider_markup("fachost", 0, 1)
+        markup = stock_provider_markup()
         self.assertEqual(
             markup,
             {
@@ -382,6 +459,16 @@ class StockQueryTests(unittest.TestCase):
         }
         markup = stock_menu_markup(state, ["blossom"])
         self.assertEqual(markup["inline_keyboard"][0][0]["text"], "Blossom Host · 1")
+
+    def test_active_change_notification_format_remains_detailed(self):
+        item = product("nexkr", "42", stock=3)
+        item.specs = {"cpu": "2 cores"}
+        text = format_change(Change(ChangeType.STOCK, item, fields=["stock"]), [])
+        self.assertIn("📦 NexKr 库存变化", text)
+        self.assertIn("ID / PID：42", text)
+        self.assertIn("地区：Test Region", text)
+        self.assertIn("CPU：2 cores", text)
+        self.assertIn("库存：3", text)
 
 
 if __name__ == "__main__":

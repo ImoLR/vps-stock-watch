@@ -415,10 +415,11 @@ class LeiKwanHostLifecycleTests(unittest.TestCase):
         provider.fetch_products = Mock(side_effect=AssertionError("network scan called"))
         restarted.send_stock_provider("leikwanhost", refresh_disk=True)
         text = restarted.telegram.sent[-1][0]
-        self.assertIn("LeiKwanHost 当前可购买库存", text)
+        self.assertIn("LeiKwanHost 当前库存", text)
         self.assertIn("🟢 正常库存", text)
-        self.assertIn("库存：3", text)
+        self.assertIn("Plan · HK$10.00HKD/月", text)
         self.assertIn("cart.php?a=add&amp;pid=57", text)
+        self.assertNotIn("库存：3", text)
         provider.fetch_products.assert_not_called()
 
 

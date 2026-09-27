@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import html
 import logging
+from collections import OrderedDict
 from datetime import datetime, timezone
-from math import ceil
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 
@@ -96,7 +96,7 @@ INTERVAL_BACK_CALLBACK = "scan_interval:back"
 INTERVAL_PROVIDER_PREFIX = "scan_interval:provider:"
 STOCK_MENU_CALLBACK = "stock:menu"
 STOCK_PROVIDER_PREFIX = "stock:provider:"
-STOCK_PAGE_SIZE = 5
+STOCK_MESSAGE_LIMIT = 3900
 
 BOT_COMMANDS = [
     {"command": "status", "description": "查看监控状态"},
@@ -143,8 +143,7 @@ def available_products(provider_state: Dict[str, Any]) -> List[Dict[str, Any]]:
     return sorted(
         result,
         key=lambda item: (
-            0 if is_hidden_inventory(item) else 1,
-            str(item.get("region") or "").casefold(),
+            1 if is_hidden_inventory(item) else 0,
             str(item.get("category") or "").casefold(),
             str(item.get("name") or "").casefold(),
             str(item.get("product_id") or ""),
@@ -184,82 +183,157 @@ def format_stock_provider(
     state: Dict[str, Any],
     name: str,
     interval: int,
-    page: int,
-    page_size: int = STOCK_PAGE_SIZE,
+    max_length: int = STOCK_MESSAGE_LIMIT,
     now: Optional[datetime] = None,
-) -> Tuple[str, int, int]:
+) -> List[str]:
     provider = state.get("providers", {}).get(name, {})
     products = available_products(provider)
     hidden = sum(1 for item in products if is_hidden_inventory(item))
-    normal = len(products) - hidden
-    page_count = max(1, int(ceil(len(products) / float(page_size))))
-    current_page = min(max(0, page), page_count - 1)
-    start = current_page * page_size
-    shown = products[start : start + page_size]
+    normal_products = [item for item in products if not is_hidden_inventory(item)]
+    hidden_products = [item for item in products if is_hidden_inventory(item)]
 
-    lines = [
-        "<b>🟢 %s 当前可购买库存</b>" % html.escape(_provider_name(name)),
-        "",
-        "最近成功扫描：%s" % _time(provider.get("last_success_at")),
-    ]
-    if _is_stale(provider.get("last_success_at"), interval, now):
-        lines.append("⚠️ 数据可能已过期")
-    lines.extend(
-        [
-            "当前可购买：%d" % len(products),
-            "🟢 正常库存：%d" % normal,
-            "🕵️ 隐藏库存：%d" % hidden,
-            "",
-            "第 %d / %d 页" % (current_page + 1, page_count),
+    # Leave room for the message header. Category blocks are kept whole whenever
+    # possible; oversized categories are split only between product lines.
+    body_limit = max(1, max_length - 220)
+    body_chunks = _stock_body_chunks(normal_products, hidden_products, body_limit)
+    chunk_count = len(body_chunks)
+    messages = []
+    for index, body in enumerate(body_chunks, 1):
+        title = "<b>📦 %s 当前库存" % html.escape(_provider_name(name))
+        if chunk_count > 1:
+            title += " (%d/%d)" % (index, chunk_count)
+        title += "</b>"
+        header = [title]
+        if index == 1:
+            header.extend(["", "当前可购买：%d" % len(products)])
+            if hidden:
+                header.append("🕵️ 其中隐藏库存：%d" % hidden)
+            header.append("最近成功扫描：%s" % _time(provider.get("last_success_at")))
+            if _is_stale(provider.get("last_success_at"), interval, now):
+                header.append("⚠️ 数据可能已过期")
+        message = "\n".join(header + (["", body] if body else []))
+        if len(message) > max_length:
+            raise ValueError("stock message exceeds Telegram length limit")
+        messages.append(message)
+    return messages
+
+
+def stock_provider_markup() -> Dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [{"text": "← 返回网站列表", "callback_data": STOCK_MENU_CALLBACK}]
         ]
+    }
+
+
+def _stock_body_chunks(
+    normal_products: List[Dict[str, Any]],
+    hidden_products: List[Dict[str, Any]],
+    limit: int,
+) -> List[str]:
+    if not normal_products and not hidden_products:
+        return ["当前没有可购买商品。"]
+
+    chunks: List[str] = []
+    current = ""
+    for section_title, products in (
+        ("🟢 正常库存", normal_products),
+        ("🕵️ 隐藏库存", hidden_products),
+    ):
+        if not products:
+            continue
+        section_pending = True
+        for category, category_products in _group_stock_products(products).items():
+            lines = [_stock_product_line(item) for item in category_products]
+            first_prefix = []
+            if section_pending:
+                first_prefix.extend(["<b>%s</b>" % section_title, ""])
+            first_prefix.append("<b>【%s】</b>" % html.escape(category))
+            block = "\n".join(first_prefix + lines)
+            candidate = _join_stock_blocks(current, block)
+            if len(candidate) <= limit:
+                current = candidate
+                section_pending = False
+                continue
+
+            if current:
+                chunks.append(current)
+                current = ""
+
+            prefix = first_prefix
+            for line_index, line in enumerate(lines):
+                if line_index:
+                    prefix = ["<b>【%s · 续】</b>" % html.escape(category)]
+                candidate = (
+                    "\n".join(prefix + [line])
+                    if not current
+                    else _join_stock_blocks(current, line)
+                )
+                if len(candidate) > limit and current:
+                    chunks.append(current)
+                    current = "\n".join(prefix + [line])
+                else:
+                    current = candidate
+                prefix = []
+            section_pending = False
+    if current:
+        chunks.append(current)
+    return chunks or ["当前没有可购买商品。"]
+
+
+def _group_stock_products(
+    products: List[Dict[str, Any]],
+) -> "OrderedDict[str, List[Dict[str, Any]]]":
+    groups: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
+    for item in products:
+        category = str(item.get("category") or "未分类")
+        groups.setdefault(category, []).append(item)
+    return groups
+
+
+def _stock_product_line(item: Dict[str, Any]) -> str:
+    name = html.escape(
+        str(item.get("name") or item.get("product_id") or "未命名商品")
     )
-    if not shown:
-        lines.extend(["", "当前没有可购买商品。"])
-    for item in shown:
-        lines.extend(["", "<b>%s</b>" % ("🕵️ 隐藏库存" if is_hidden_inventory(item) else "🟢 正常库存")])
-        lines.append("<b>%s</b>" % html.escape(str(item.get("name") or item.get("product_id") or "未命名商品")))
-        _append(lines, "地区", item.get("region"))
-        _append(lines, "分类", item.get("category"))
-        stock = item.get("stock")
-        if isinstance(stock, int) and not isinstance(stock, bool) and stock > 0:
-            lines.append("库存：%d" % stock)
-        else:
-            lines.append("库存：有货")
-        _append(lines, "价格", item.get("price"))
-        _append(lines, "周期", item.get("billing_cycle"))
-        lines.append("ID / PID：%s" % html.escape(str(item.get("product_id") or "未提供")))
-        url = item.get("url")
-        if url:
-            lines.append(
-                '<a href="%s">🛒 购买 / 查看商品</a>'
-                % html.escape(str(url), quote=True)
-            )
-        else:
-            lines.append("购买链接：未提供")
-    return "\n".join(lines), current_page, page_count
+    price = html.escape(str(item.get("price") or "价格未提供"))
+    cycle = _short_billing_cycle(item.get("billing_cycle"))
+    price_cycle = "%s/%s" % (price, html.escape(cycle)) if cycle else price
+    url = item.get("url")
+    link = (
+        '<a href="%s">🛒 直达</a>' % html.escape(str(url), quote=True)
+        if url
+        else "🛒 链接未提供"
+    )
+    return "• %s · %s · %s" % (name, price_cycle, link)
 
 
-def stock_provider_markup(name: str, page: int, page_count: int) -> Dict[str, Any]:
-    rows = []
-    navigation = []
-    if page > 0:
-        navigation.append(
-            {
-                "text": "← 上一页",
-                "callback_data": STOCK_PROVIDER_PREFIX + name + ":%d" % (page - 1),
-            }
-        )
-    if page + 1 < page_count:
-        navigation.append(
-            {
-                "text": "下一页 →",
-                "callback_data": STOCK_PROVIDER_PREFIX + name + ":%d" % (page + 1),
-            }
-        )
-    if navigation:
-        rows.append(navigation)
-    rows.append([{"text": "← 返回网站列表", "callback_data": STOCK_MENU_CALLBACK}])
-    return {"inline_keyboard": rows}
+def _short_billing_cycle(value: Any) -> str:
+    if not value:
+        return ""
+    shown = str(value).strip()
+    normalized = shown.casefold().replace("_", " ").replace("-", " ")
+    return {
+        "monthly": "月",
+        "1 month": "月",
+        "quarterly": "季",
+        "3 months": "季",
+        "semiannually": "半年",
+        "semi annually": "半年",
+        "6 months": "半年",
+        "annually": "年",
+        "yearly": "年",
+        "12 months": "年",
+        "biennially": "两年",
+        "2 years": "两年",
+        "triennially": "三年",
+        "3 years": "三年",
+        "one time": "一次性",
+        "onetime": "一次性",
+    }.get(normalized, shown)
+
+
+def _join_stock_blocks(left: str, right: str) -> str:
+    return "%s\n\n%s" % (left, right) if left else right
 
 
 def format_interval_menu(intervals: Dict[str, int], provider_names: List[str]) -> str:

@@ -308,7 +308,7 @@ class WatcherApp:
             self._pending_interval_provider = None
             self.send_stock_provider(name, int(page_text), refresh_disk=True)
             LOG.info(
-                "answered Telegram /stock provider=%s page=%s from state",
+                "answered Telegram /stock provider=%s legacy_page=%s from state",
                 name,
                 page_text,
             )
@@ -336,16 +336,14 @@ class WatcherApp:
         self, name: str, page: int = 0, refresh_disk: bool = False
     ) -> None:
         state = self._stock_state(refresh_disk)
-        text, current_page, page_count = format_stock_provider(
+        messages = format_stock_provider(
             state,
             name,
             self.provider_interval(name),
-            page,
         )
-        self._send_telegram(
-            text,
-            stock_provider_markup(name, current_page, page_count),
-        )
+        for index, text in enumerate(messages):
+            markup = stock_provider_markup() if index == len(messages) - 1 else None
+            self._send_telegram(text, markup)
 
     def _stock_state(self, refresh_disk: bool) -> Dict[str, Any]:
         if refresh_disk:
