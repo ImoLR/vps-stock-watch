@@ -1,0 +1,25 @@
+{
+  "groups": [{
+    "id": 1,
+    "slug": "vds",
+    "title": "VDS",
+    "type": "pve",
+    "zones": [{"id": 1, "slug": "seoul3", "title": "Zone 3"}],
+    "subgroups": [{"id": 3, "slug": "kt", "title": "KR · KT"}],
+    "products": [{
+      "id": 1,
+      "slug": "kt-ipv4-1c2g",
+      "name": "KT-IPv4-1C2G",
+      "group_id": 1,
+      "subgroup_id": 3,
+      "zones": [1],
+      "price_usd": "38.00",
+      "price_cents": 3800,
+      "setup_fee_cents": 0,
+      "cycle_months": 1,
+      "in_stock": true,
+      "limited": false,
+      "description": "- 1c2g Dedicated vResource\n- 20GB nvme storage\n- 1x KT IPv4 address\n- 100Mbps guaranteed 1Gbps max\n- Unmetered traffic"
+    }]
+  }]
+}

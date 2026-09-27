@@ -1,0 +1,44 @@
+.env
+.env.*
+!.env.example
+.venv/
+.playwright-browsers/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage*
+htmlcov/
+data/
+playwright-report/
+test-results/
+
+# Runtime output and process metadata
+*.log
+*.pid
+*.pid.lock
+*.tmp
+*.sqlite
+*.sqlite3
+logs/
+tmp/
+temp/
+
+# Browser/network reconnaissance artifacts
+*.har
+*.trace.zip
+storage-state*.json
+cookies*.json
+session*.json
+browser-profile/
+chromium-profile/
+network-dumps/
+recon/
+
+# Local editor/OS files
+.DS_Store
+*.swp
+*.swo
+*~

@@ -1,0 +1,7 @@
+beautifulsoup4>=4.12,<5
+jsonpath-ng>=1.7,<2
+lxml>=5.0,<7
+playwright>=1.48,<2
+python-dotenv>=1.0,<2
+PyYAML>=6.0,<7
+requests>=2.31,<3

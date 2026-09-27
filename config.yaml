@@ -1,0 +1,103 @@
+poll_interval_seconds: 60
+state_path: data/state.json
+
+suspicious_keywords:
+  - test
+  - beta
+  - internal
+  - do not buy
+  - 测试
+
+providers:
+  - name: nexkr
+    type: nexkr
+    enabled: true
+    catalog_url: https://nexkr.sh/api/v1/shop/groups
+    interval_seconds: 60
+    timeout_seconds: 25
+    max_backoff_seconds: 1800
+
+  - name: dmit
+    type: dmit
+    enabled: true
+    catalog_url: https://www.dmit.io/cart.php
+    interval_seconds: 120
+    timeout_seconds: 35
+    max_backoff_seconds: 1800
+    fetch_mode: auto
+    # DMIT blocks Chromium's headless signature on the currently tested host.
+    # Run the watcher under xvfb-run so Playwright can use headed mode.
+    browser_headless: false
+    browser_args:
+      - --disable-blink-features=AutomationControlled
+    browser_wait_selector: .cart-products-box[pid]
+    browser_wait_state: attached
+    browser_settle_ms: 1500
+    # Optional known/hidden PIDs not present in the catalog. Each adds one
+    # cart.php?a=add&pid=... request per DMIT check, so keep this list short.
+    extra_pids: []
+
+  - name: blossom
+    type: blossom
+    enabled: true
+    catalog_url: https://blossomhost.us/api/catalog
+    interval_seconds: 60
+    timeout_seconds: 25
+    max_backoff_seconds: 1800
+
+  - name: boilcloud
+    type: boilcloud
+    enabled: true
+    base_url: https://cloud.boil.network/
+    store_url: https://cloud.boil.network/index.php?rp=/store
+    sitemap_url: https://cloud.boil.network/sitemap.xml
+    interval_seconds: 120
+    timeout_seconds: 30
+    retry_attempts: 2
+    retry_backoff_seconds: 1
+    max_categories: 100
+    max_backoff_seconds: 1800
+
+  - name: fachost
+    type: fachost
+    enabled: true
+    base_url: https://fachost.cloud/
+    interval_seconds: 60
+    timeout_seconds: 25
+    retry_attempts: 2
+    retry_backoff_seconds: 1
+    max_categories: 100
+    max_backoff_seconds: 1800
+    # Search-indexed checkout that remains publicly orderable but is intentionally
+    # absent from the current storefront navigation. A 404 here means it was removed.
+    extra_product_urls:
+      - https://fachost.cloud/products/tw-hinet-vds/hinet-vds-lite/checkout
+
+  - name: leikwanhost
+    type: leikwanhost
+    enabled: true
+    base_url: https://buy.leikwanhost.com/
+    store_url: https://buy.leikwanhost.com/cart.php
+    interval_seconds: 120
+    timeout_seconds: 30
+    retry_attempts: 2
+    retry_backoff_seconds: 1
+    minimum_categories: 10
+    minimum_products: 20
+    max_categories: 100
+    max_backoff_seconds: 1800
+
+# A simple provider can be added without Python. Example:
+#  - name: example
+#    type: generic
+#    enabled: false
+#    catalog_url: https://merchant.example/products
+#    format: html
+#    item_rule: {type: css, selector: ".product-card"}
+#    fields:
+#      product_id: {type: css, selector: "[data-sku]", attribute: data-sku}
+#      name: {type: css, selector: ".name"}
+#      price: {type: css, selector: ".price"}
+#      stock: {type: regex, pattern: "Stock:\\s*(?P<value>\\d+)", transforms: [int]}
+#      url: {type: css, selector: "a.buy", attribute: href}
+#    soldout_rule: {type: css, selector: ".sold-out"}

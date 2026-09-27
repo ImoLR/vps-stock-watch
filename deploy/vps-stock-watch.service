@@ -1,0 +1,23 @@
+[Unit]
+Description=VPS catalog and stock watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/projects/vps-stock-watch/vps-stock-watch
+EnvironmentFile=/root/projects/vps-stock-watch/vps-stock-watch/.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/root/projects/vps-stock-watch/vps-stock-watch/.playwright-browsers
+ExecStart=/usr/bin/xvfb-run -a /root/projects/vps-stock-watch/vps-stock-watch/.venv/bin/python -m watcher.app --config /root/projects/vps-stock-watch/vps-stock-watch/config.yaml
+Restart=on-failure
+RestartSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/root/projects/vps-stock-watch/vps-stock-watch/data
+
+[Install]
+WantedBy=multi-user.target
