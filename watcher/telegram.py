@@ -188,6 +188,19 @@ def format_stock_provider(
 ) -> List[str]:
     provider = state.get("providers", {}).get(name, {})
     products = available_products(provider)
+    monitored = provider.get("products", {})
+    monitored_count = len(monitored) if isinstance(monitored, dict) else 0
+    if not products:
+        lines = [
+            "<b>📦 %s 当前库存</b>" % html.escape(_provider_name(name)),
+            "",
+            "当前暂无可购买库存",
+            "监控商品：%d" % monitored_count,
+            "最近成功扫描：%s" % _time(provider.get("last_success_at")),
+        ]
+        if _is_stale(provider.get("last_success_at"), interval, now):
+            lines.append("⚠️ 数据可能已过期")
+        return ["\n".join(lines)]
     hidden = sum(1 for item in products if is_hidden_inventory(item))
     normal_products = [item for item in products if not is_hidden_inventory(item)]
     hidden_products = [item for item in products if is_hidden_inventory(item)]
@@ -544,4 +557,6 @@ def _provider_name(value: str) -> str:
         "boilcloud": "BOILCLOUD",
         "fachost": "FACHOST",
         "leikwanhost": "LeiKwanHost",
+        "liqunhuiju": "利群汇聚",
+        "vmsilo": "VMSILO",
     }.get(value, value.title())

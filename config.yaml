@@ -87,6 +87,27 @@ providers:
     max_categories: 100
     max_backoff_seconds: 1800
 
+  - name: liqunhuiju
+    type: liqunhuiju
+    enabled: true
+    base_url: https://v3.leikwanhost.com/
+    interval_seconds: 60
+    timeout_seconds: 25
+    max_backoff_seconds: 1800
+
+  - name: vmsilo
+    type: vmsilo
+    enabled: true
+    base_url: https://portal.vmsilo.com/
+    store_url: https://portal.vmsilo.com/store
+    interval_seconds: 120
+    timeout_seconds: 30
+    retry_attempts: 2
+    retry_backoff_seconds: 1
+    minimum_categories: 2
+    max_categories: 100
+    max_backoff_seconds: 1800
+
 # A simple provider can be added without Python. Example:
 #  - name: example
 #    type: generic

@@ -51,6 +51,11 @@ class BaseProvider(ABC):
     def fetch_products(self) -> List[Product]:
         raise NotImplementedError
 
+    def validate_snapshot(
+        self, products: List[Product], previous_state: Dict[str, Any]
+    ) -> None:
+        """Allow a provider to reject a structurally incomplete snapshot."""
+
     def should_notify(self, change: Change) -> bool:
         """Return whether a recorded change should produce a Telegram notification."""
         return not bool(change.product.metadata.get("notification_suppressed", False))

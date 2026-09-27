@@ -3,8 +3,9 @@
 一个面向多 VPS/IDC 商家的轻量监控器。Provider 只负责把站点转换成统一
 `Product`；完整目录比较、JSON 状态、失败退避、Telegram 和 `/status` 都在核心层。
 
-内置 NexKr、DMIT、Blossom Host、BOILCLOUD、FACHOST 与 LeiKwanHost，同时提供 CSS、XPath、Regex、JSONPath 规则，可用 YAML
-接入结构简单的网站；复杂网站继续增加 Python Provider。
+内置 NexKr、DMIT、Blossom Host、BOILCLOUD、FACHOST、LeiKwanHost、利群汇聚与 VMSILO，
+同时提供 CSS、XPath、Regex、JSONPath 规则，可用 YAML 接入结构简单的网站；复杂网站继续
+增加 Python Provider。
 
 ## 已核实的数据源（更新至 2026-09-27）
 
@@ -150,6 +151,38 @@ catalog JSON/API；`cart.php` 会跳转到默认商品组，每个分类页的�
 商品购买链接使用经官网验证的 `cart.php?a=add&pid=<PID>`。首次成功只建立静默 baseline，
 默认扫描间隔为 120 秒。
 
+### 利群汇聚
+
+利群汇聚位于 `https://v3.leikwanhost.com/`，是独立的 LeiKwan Bridge PHP 门户，不是
+`buy.leikwanhost.com` 的 WHMCS 商城。Provider 使用独立的 `liqunhuiju` namespace，绝不
+与 LeiKwanHost PID 合并。公开首页当前可正常访问，具有稳定的
+`body.pg-public.bridge-home-page`、`.public-shell`、登录与知识库入口；但没有公开商城链接或
+商品容器，`robots.txt`、`sitemap.xml`、`store` 和 `cart.php` 当前均不存在。
+
+因此当前首页被确认是完整可识别、但没有公开商品的合法空目录：首次扫描会建立
+`products=0` 的静默 baseline，之后仍按 60 秒默认间隔持续检查。HTTP 200 但品牌、页面结构
+或必要入口缺失时会判为 incomplete catalog。若旧 state 已有商品，而新页面只剩无目录的
+landing page，也会拒绝空快照并保留旧 state；只有明确的完整 catalog 空标记才允许从
+N 个商品变成 0 并产生正常下架变化。当前扫描只需 1 个普通 HTTP GET，不需要 Chromium。
+
+### VMSILO
+
+VMSILO 位于 `https://portal.vmsilo.com/`，已确认使用 WHMCS + ShufyTheme。没有发现公开
+catalog JSON/API；分类、商品、价格、付款周期、配置和下单链接均已包含在服务端 HTML，
+因此 Provider 使用普通 HTTP 自动发现首页及分类侧栏中的 `/store/<category>`，不启动
+Chromium，也不调用购物车 AJAX。
+
+商品卡没有公开 WHMCS 数字 PID，购物车中的 `i=0/1/...` 又是会话内索引，不能作为 ID；
+Provider 因此使用公开商品 URL 中稳定的 product slug，并以 `vmsilo:<slug>` 保存。购买链接
+保留网站给出的 `/store/<category>/<product-slug>`，不猜测 PID URL。若页面公开精确
+`N Available` 就保存整数，否则只依据可订购/售罄按钮保存布尔状态，绝不伪造库存 1。
+
+2026-09-27 的真实扫描发现 2 个侧栏分类：IEPL 有 6 个商品，socks5 以模板计数明确返回
+0 个商品；6 个商品当前全部可订购，均只提供布尔库存，没有具体库存数字。首页旧 `cn2`
+入口会重定向到 IEPL 并被去重；robots、sitemap 与搜索结果没有发现额外可购买的隐藏商品。
+完整扫描使用 4 个普通 HTTP GET，默认间隔为 120 秒。分类侧栏缺失、模板商品计数与实际
+卡片数不一致、请求失败或未知空布局都会拒绝整轮 snapshot，避免误报批量下架。
+
 参考结构：[NOAFF Restock Monitor](https://github.com/cshaizhihao/noaff-restock-monitor)
 的通用规则、WHMCS 和商品去重思想，以及
 [近期 DMIT 页面解析样例](https://github.com/Ra2fSt/dmit-monitor)。本项目代码为独立实现。
@@ -171,7 +204,8 @@ catalog JSON/API；`cart.php` 会跳转到默认商品组，每个分类页的�
 
 ## 工作方式
 
-每个成功抓取都必须是完整、非空目录。首次成功只建立基线，不通知已有商品。之后以
+每个成功抓取都必须是完整目录；只有 Provider 能以明确 schema 证明的合法空目录才允许
+返回 0 商品。首次成功只建立基线，不通知已有商品。之后以
 `provider + product_id` 为唯一键比较：
 
 - 新 ID：新品；名称含测试关键词时附加“疑似测试商品”，但不丢弃；
@@ -246,7 +280,7 @@ Provider 数量、各 Provider 最近检查/成功时间、商品数、有货数
 等文字命令。一个 token 不应同时由另一个 getUpdates 消费者或 webhook 使用。
 
 `/stock` 只读取最近成功扫描写入的 JSON state，不调用 Provider、不发起商城请求，也不
-启动 Chromium。首页按当前 state 实时显示六个 Provider 的可购买数量；进入 Provider 后
+启动 Chromium。首页按当前 state 实时显示八个 Provider 的可购买数量；进入 Provider 后
 按 state 中保存的真实分类列出全部当前可购买商品。每行只显示名称、价格/周期和直达
 链接；长目录会自动拆成连续消息，优先在分类之间拆分，只有最后一条消息提供返回按钮。
 刷新只重新读取磁盘 state。
@@ -296,9 +330,9 @@ TELEGRAM_CHAT_ID=123456789
 .venv/bin/python -m unittest discover -v
 ```
 
-测试不访问真实商家，也不调用 Telegram。当前完整测试集为 133 项，覆盖首次基线、新
+测试不访问真实商家，也不调用 Telegram。当前完整测试集为 157 项，覆盖首次基线、新
 SKU、补货、售罄、库存数字变化、价格/付款周期/名称变化、下架、抓取失败保留旧状态、
-布尔库存不伪报数字变化、六个内置 Provider 的发现与完整目录保护，以及四种规则解析。
+布尔库存不伪报数字变化、八个内置 Provider 的发现与完整目录保护，以及四种规则解析。
 
 ## systemd 服务
 

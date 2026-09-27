@@ -12,6 +12,7 @@ from watcher.providers.base import BaseProvider
 from watcher.state import StateStore
 from watcher.telegram import (
     BOT_COMMANDS,
+    INTERVAL_MENU_CALLBACK,
     STOCK_MENU_CALLBACK,
     STOCK_PROVIDER_PREFIX,
     available_products,
@@ -25,7 +26,16 @@ from watcher.telegram import (
 
 
 ADMIN_ID = "12345"
-PROVIDER_NAMES = ["nexkr", "dmit", "blossom", "boilcloud", "fachost", "leikwanhost"]
+PROVIDER_NAMES = [
+    "nexkr",
+    "dmit",
+    "blossom",
+    "boilcloud",
+    "fachost",
+    "leikwanhost",
+    "liqunhuiju",
+    "vmsilo",
+]
 
 
 def product(
@@ -151,7 +161,7 @@ class StockQueryTests(unittest.TestCase):
         self.app.configure_bot_commands()
         self.assertEqual(self.app.telegram.registered_commands, BOT_COMMANDS)
 
-    def test_stock_home_shows_six_providers_with_live_available_counts(self):
+    def test_stock_home_shows_eight_providers_with_live_available_counts(self):
         self.seed_all_providers()
         self.app.process_update(message("/stock"))
         text, markup = self.app.telegram.sent[-1]
@@ -166,7 +176,36 @@ class StockQueryTests(unittest.TestCase):
                 "BOILCLOUD · 1",
                 "FACHOST · 1",
                 "LeiKwanHost · 1",
+                "利群汇聚 · 1",
+                "VMSILO · 1",
                 "🔄 刷新",
+            ],
+        )
+
+    def test_status_and_interval_menu_show_all_eight_providers(self):
+        self.seed_all_providers()
+        self.app.process_update(message("/status"))
+        status, _markup = self.app.telegram.sent[-1]
+        self.assertIn("Provider 数量：8", status)
+        self.assertIn("<b>利群汇聚</b>", status)
+        self.assertIn("<b>VMSILO</b>", status)
+        self.app.process_update(callback(INTERVAL_MENU_CALLBACK))
+        text, markup = self.app.telegram.sent[-1]
+        self.assertIn("利群汇聚：60 秒", text)
+        self.assertIn("VMSILO：60 秒", text)
+        labels = [row[0]["text"] for row in markup["inline_keyboard"]]
+        self.assertEqual(
+            labels,
+            [
+                "NexKr",
+                "DMIT",
+                "Blossom Host",
+                "BOILCLOUD",
+                "FACHOST",
+                "LeiKwanHost",
+                "利群汇聚",
+                "VMSILO",
+                "返回",
             ],
         )
 
@@ -349,7 +388,7 @@ class StockQueryTests(unittest.TestCase):
             self.assertEqual(rendered.count("Long plan %02d" % index), 1)
         self.assertTrue(all(len(message) <= 430 for message in messages))
 
-    def test_all_six_providers_use_their_saved_category_labels(self):
+    def test_all_eight_providers_use_their_saved_category_labels(self):
         for index, name in enumerate(PROVIDER_NAMES, 1):
             category = "Saved category %d" % index
             self.save_products(

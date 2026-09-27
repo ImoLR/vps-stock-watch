@@ -9,7 +9,9 @@ from .dmit import DmitProvider
 from .fachost import FachostProvider
 from .generic import GenericProvider
 from .leikwanhost import LeikwanhostProvider
+from .liqunhuiju import LiqunHuijuProvider
 from .nexkr import NexKrProvider
+from .vmsilo import VmsiloProvider
 
 
 def build_provider(config: Dict[str, Any]) -> BaseProvider:
@@ -21,6 +23,8 @@ def build_provider(config: Dict[str, Any]) -> BaseProvider:
         "dmit": DmitProvider,
         "fachost": FachostProvider,
         "leikwanhost": LeikwanhostProvider,
+        "liqunhuiju": LiqunHuijuProvider,
+        "vmsilo": VmsiloProvider,
         "generic": GenericProvider,
     }
     if provider_type not in classes:
@@ -34,5 +38,7 @@ __all__ = [
     "BoilcloudProvider",
     "FachostProvider",
     "LeikwanhostProvider",
+    "LiqunHuijuProvider",
+    "VmsiloProvider",
     "build_provider",
 ]
