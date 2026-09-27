@@ -5,12 +5,12 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
-from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup, Tag
 
-from ..models import Product
+from ..models import Change, ChangeType, Product
 from .base import BaseProvider, FetchError, ParseError, is_challenge_page
 
 
@@ -63,7 +63,7 @@ class LeikwanhostProvider(BaseProvider):
         store_url = str(self.config.get("store_url", self.STORE_URL))
 
         homepage = self._fetch_document(base_url)
-        store = self._fetch_document(store_url)
+        store = self._fetch_document(self._with_preferred_currency(store_url))
         references: Dict[str, Dict[str, Any]] = {}
         self._collect_categories(homepage, references, "homepage_navigation")
         store_navigation = self._collect_categories(
@@ -109,12 +109,13 @@ class LeikwanhostProvider(BaseProvider):
             if requested_slug == store_slug:
                 document = store
             else:
+                category_url = urljoin(
+                    base_url,
+                    "index.php?rp=/store/%s"
+                    % quote(requested_slug, safe="-._~"),
+                )
                 document = self._fetch_document(
-                    urljoin(
-                        base_url,
-                        "index.php?rp=/store/%s"
-                        % quote(requested_slug, safe="-._~"),
-                    )
+                    self._with_preferred_currency(category_url)
                 )
             final_slug = self._category_slug(document.url)
             if not final_slug:
@@ -177,6 +178,20 @@ class LeikwanhostProvider(BaseProvider):
             )
 
         products = [products_by_id[key] for key in sorted(products_by_id, key=int)]
+        expected_currency = str(
+            self.config.get("preferred_currency_code", "")
+        ).strip().upper()
+        if expected_currency:
+            unexpected = sorted(
+                product.product_id
+                for product in products
+                if product.metadata.get("currency") != expected_currency
+            )
+            if unexpected:
+                raise ParseError(
+                    "LeiKwanHost preferred currency %s was not applied to PID(s): %s"
+                    % (expected_currency, ", ".join(unexpected))
+                )
         duration = time.monotonic() - started
         self.last_scan_stats = {
             "categories": len(processed),
@@ -332,10 +347,14 @@ class LeikwanhostProvider(BaseProvider):
         lines = self._description_lines(description)
         specs = self._specs(lines)
         region = self._region(name, lines, category_label)
-        card_url = urljoin(category_url, str(button.get("href")))
-        product_url = urljoin(
-            str(self.config.get("base_url", self.BASE_URL)),
-            "cart.php?a=add&pid=%s" % pid,
+        card_url = self._with_preferred_currency(
+            urljoin(category_url, str(button.get("href")))
+        )
+        product_url = self._with_preferred_currency(
+            urljoin(
+                str(self.config.get("base_url", self.BASE_URL)),
+                "cart.php?a=add&pid=%s" % pid,
+            )
         )
         currency_match = re.search(r"([A-Z]{3})(?![A-Z])", base_price)
         category_record = {
@@ -371,6 +390,31 @@ class LeikwanhostProvider(BaseProvider):
                 "setup_fee": setup_fee,
                 "stock_source": stock_source,
             },
+        )
+
+    def should_notify(self, change: Change) -> bool:
+        """Keep the one-time HKD-to-CNY presentation migration silent."""
+        expected = str(self.config.get("preferred_currency_code", "")).strip().upper()
+        if (
+            change.type == ChangeType.PRICE
+            and change.fields == ["price"]
+            and change.old is not None
+            and expected
+            and change.product.metadata.get("currency") == expected
+            and change.old.metadata.get("currency") != expected
+        ):
+            return False
+        return super().should_notify(change)
+
+    def _with_preferred_currency(self, url: str) -> str:
+        currency_id = str(self.config.get("preferred_currency_id", "")).strip()
+        if not currency_id:
+            return url
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        query["currency"] = [currency_id]
+        return urlunparse(
+            parsed._replace(query=urlencode(query, doseq=True))
         )
 
     def _fetch_document(self, url: str) -> FetchedDocument:

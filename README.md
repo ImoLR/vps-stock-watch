@@ -148,7 +148,8 @@ catalog JSON/API；`cart.php` 会跳转到默认商品组，每个分类页的�
 安全下限；任一分类失败、导航残缺、布局异常或总量明显异常都会让整轮失败，旧 state 保持
 不变。正常目录商品统一保存 `metadata.discovery.hidden=false`；当前 sitemap/robots 均不存在，
 搜索索引只发现一个已 302 到当前 `hiternet` 的旧分类别名，没有发现额外可购买的隐藏商品。
-商品购买链接使用经官网验证的 `cart.php?a=add&pid=<PID>`。首次成功只建立静默 baseline，
+商城扫描和商品购买链接固定使用官网的 CNY 货币编号 `2`，链接格式为
+`cart.php?a=add&pid=<PID>&currency=2`，不会跟随新会话回落到默认 HKD。首次成功只建立静默 baseline，
 默认扫描间隔为 120 秒。
 
 ### 利群汇聚

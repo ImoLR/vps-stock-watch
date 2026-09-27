@@ -78,6 +78,10 @@ providers:
     enabled: true
     base_url: https://buy.leikwanhost.com/
     store_url: https://buy.leikwanhost.com/cart.php
+    # WHMCS currency ID 2 is the site's public CNY option. Keep both catalog
+    # prices and direct order links in CNY instead of the default HKD session.
+    preferred_currency_id: 2
+    preferred_currency_code: CNY
     interval_seconds: 120
     timeout_seconds: 30
     retry_attempts: 2

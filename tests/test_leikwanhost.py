@@ -163,6 +163,38 @@ class LeiKwanHostProviderTests(unittest.TestCase):
         self.assertEqual(item.specs["ram"], "4GB RAM")
         self.assertEqual(item.url, "https://buy.leikwanhost.com/cart.php?a=add&pid=57")
 
+    def test_preferred_currency_is_added_to_direct_order_url(self):
+        self.provider.config.update(
+            {"preferred_currency_id": 2, "preferred_currency_code": "CNY"}
+        )
+        item = self.parse(
+            {
+                "pid": "57",
+                "price": "￥116.00 CNY",
+                "setup": "￥10.00 Setup Fee",
+                "stock_text": "3 Available",
+            }
+        )
+        self.assertEqual(item.metadata["currency"], "CNY")
+        self.assertEqual(
+            item.url,
+            "https://buy.leikwanhost.com/cart.php?a=add&pid=57&currency=2",
+        )
+
+    def test_currency_migration_price_change_is_silent(self):
+        self.provider.config.update(
+            {"preferred_currency_id": 2, "preferred_currency_code": "CNY"}
+        )
+        old = self.parse({"pid": "57", "price": "HK$128.00HKD"})
+        current = self.parse({"pid": "57", "price": "￥116.00 CNY"})
+        change = Change(ChangeType.PRICE, current, old, ["price"])
+        self.assertFalse(self.provider.should_notify(change))
+
+        current.price = "￥118.00 CNY"
+        old.price = "￥116.00 CNY"
+        old.metadata["currency"] = "CNY"
+        self.assertTrue(self.provider.should_notify(change))
+
     def test_boolean_inventory_is_not_fabricated(self):
         item = self.parse({"pid": "19", "stock_text": None})
         self.assertIsNone(item.stock)
