@@ -112,6 +112,30 @@ providers:
     max_categories: 100
     max_backoff_seconds: 1800
 
+  - name: misaka
+    type: misaka
+    enabled: true
+    api_base: https://app.misaka.io/api/mc2
+    buy_base: https://app.misaka.io/iaas/vm/create
+    focus_regions:
+      - HK
+      - TW
+      - JP
+    focus_region_labels:
+      HK: Hong Kong
+      TW: Taiwan
+      JP: Japan
+    interval_seconds: 60
+    timeout_seconds: 20
+    retry_attempts: 2
+    retry_backoff_seconds: 0.5
+    minimum_regions: 30
+    minimum_global_products: 250
+    max_regions: 100
+    minimum_region_retention_ratio: 0.8
+    minimum_product_retention_ratio: 0.7
+    max_backoff_seconds: 1800
+
 # A simple provider can be added without Python. Example:
 #  - name: example
 #    type: generic

@@ -56,6 +56,17 @@ class BaseProvider(ABC):
     ) -> None:
         """Allow a provider to reject a structurally incomplete snapshot."""
 
+    def additional_changes(
+        self, products: List[Product], previous_state: Dict[str, Any]
+    ) -> List[Change]:
+        """Return provider-specific changes not represented by Product diffing."""
+        return []
+
+    def update_state_after_success(
+        self, provider_state: Dict[str, Any], products: List[Product]
+    ) -> None:
+        """Persist provider-specific baseline data in the same atomic state save."""
+
     def should_notify(self, change: Change) -> bool:
         """Return whether a recorded change should produce a Telegram notification."""
         return not bool(change.product.metadata.get("notification_suppressed", False))

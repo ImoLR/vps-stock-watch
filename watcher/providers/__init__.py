@@ -10,6 +10,7 @@ from .fachost import FachostProvider
 from .generic import GenericProvider
 from .leikwanhost import LeikwanhostProvider
 from .liqunhuiju import LiqunHuijuProvider
+from .misaka import MisakaProvider
 from .nexkr import NexKrProvider
 from .vmsilo import VmsiloProvider
 
@@ -24,6 +25,7 @@ def build_provider(config: Dict[str, Any]) -> BaseProvider:
         "fachost": FachostProvider,
         "leikwanhost": LeikwanhostProvider,
         "liqunhuiju": LiqunHuijuProvider,
+        "misaka": MisakaProvider,
         "vmsilo": VmsiloProvider,
         "generic": GenericProvider,
     }
@@ -39,6 +41,7 @@ __all__ = [
     "FachostProvider",
     "LeikwanhostProvider",
     "LiqunHuijuProvider",
+    "MisakaProvider",
     "VmsiloProvider",
     "build_provider",
 ]

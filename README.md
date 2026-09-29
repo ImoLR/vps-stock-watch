@@ -3,11 +3,11 @@
 一个面向多 VPS/IDC 商家的轻量监控器。Provider 只负责把站点转换成统一
 `Product`；完整目录比较、JSON 状态、失败退避、Telegram 和 `/status` 都在核心层。
 
-内置 NexKr、DMIT、Blossom Host、BOILCLOUD、FACHOST、LeiKwanHost、利群汇聚与 VMSILO，
+内置 NexKr、DMIT、Blossom Host、BOILCLOUD、FACHOST、LeiKwanHost、利群汇聚、VMSILO 与 Misaka，
 同时提供 CSS、XPath、Regex、JSONPath 规则，可用 YAML 接入结构简单的网站；复杂网站继续
 增加 Python Provider。
 
-## 已核实的数据源（更新至 2026-09-27）
+## 已核实的数据源（更新至 2026-09-29）
 
 ### NexKr
 
@@ -184,6 +184,26 @@ Provider 因此使用公开商品 URL 中稳定的 product slug，并以 `vmsilo
 完整扫描使用 4 个普通 HTTP GET，默认间隔为 120 秒。分类侧栏缺失、模板商品计数与实际
 卡片数不一致、请求失败或未知空布局都会拒绝整轮 snapshot，避免误报批量下架。
 
+### Misaka
+
+Misaka 的控制台是 Vite SPA；前端 API client 公开调用
+`GET /api/mc2/regions` 和 `GET /api/mc2/regions/<region-slug>/plans`。Provider 直接使用这两个
+JSON 接口，不抓取渲染后的 UI，也不需要 Chromium。地区使用 API 的 `slug`、`id` 和
+`country_code`，套餐使用真实数字 `id`，最终唯一键为
+`misaka:<region-slug>:<plan-id>`，不会把不同地区的同名 Size 合并。
+
+监控分成两层：所有公开地区和 Plan 都进入 Global Catalog baseline，用于发现新地区和
+全球新品；只有配置中的 `focus_regions: [HK, TW, JP]` 保存并比较完整库存、三种付款周期
+价格、可选促销字段和下架。非重点地区仍保留轻量 catalog Product，但使用
+`catalog_only=true` 和 `available=null`，所以不会产生补货、售罄、库存、价格、折扣或下架
+通知，也不会出现在 `/stock`。港台日的 `available=false` Plan 绝不丢弃。
+
+2026-09-29 实测为 42 个地区、361 个地区 Plan；港台日共 50 个 Plan，其中 37 个有货、
+13 个无货。API 当前只提供 `available` 与 `unavailable_reason=out_of_stock`，没有具体库存
+数字，因此 `stock=null`。价格字段为 `price_monthly`、`price_semiannual` 和
+`price_annual`，币种为 USD；当前 schema 没有原价、折扣或 promotion 字段，也没有正在
+进行的促销。完整扫描 43 个普通 GET，约 2.6–2.8 秒，默认间隔为 60 秒。
+
 参考结构：[NOAFF Restock Monitor](https://github.com/cshaizhihao/noaff-restock-monitor)
 的通用规则、WHMCS 和商品去重思想，以及
 [近期 DMIT 页面解析样例](https://github.com/Ra2fSt/dmit-monitor)。本项目代码为独立实现。
@@ -281,7 +301,7 @@ Provider 数量、各 Provider 最近检查/成功时间、商品数、有货数
 等文字命令。一个 token 不应同时由另一个 getUpdates 消费者或 webhook 使用。
 
 `/stock` 只读取最近成功扫描写入的 JSON state，不调用 Provider、不发起商城请求，也不
-启动 Chromium。首页按当前 state 实时显示八个 Provider 的可购买数量；进入 Provider 后
+启动 Chromium。首页按当前 state 实时显示九个 Provider 的可购买数量；进入 Provider 后
 按 state 中保存的真实分类列出全部当前可购买商品。每行只显示名称、价格/周期和直达
 链接；长目录会自动拆成连续消息，优先在分类之间拆分，只有最后一条消息提供返回按钮。
 刷新只重新读取磁盘 state。
@@ -296,7 +316,7 @@ Provider 数量、各 Provider 最近检查/成功时间、商品数、有货数
 最近成功时间超过当前 Provider 扫描间隔两倍时会提示数据可能过期，但仍
 保留最后一次成功库存。命令消息和每一次 callback 都重新校验管理员 chat 与 sender。
 
-扫描间隔菜单分别显示 NexKr、DMIT、Blossom Host、BOILCLOUD、FACHOST 和 LeiKwanHost 的当前有效间隔。管理员选择商家后
+扫描间隔菜单显示全部九个 Provider 的当前有效间隔。管理员选择商家后
 直接输入整数秒数；允许范围为 10–86400 秒，输入 `17` 就会原样保存为 17 秒，没有预设
 按钮或取整。只有 `.env` 中 `TELEGRAM_CHAT_ID` 对应的私聊用户同时匹配 callback 发送者
 和消息 chat 时才可以修改，直接发送数字也不能绕过权限。
@@ -331,14 +351,18 @@ TELEGRAM_CHAT_ID=123456789
 .venv/bin/python -m unittest discover -v
 ```
 
-测试不访问真实商家，也不调用 Telegram。当前完整测试集为 157 项，覆盖首次基线、新
+测试不访问真实商家，也不调用 Telegram。当前完整测试集为 174 项，覆盖首次基线、新
 SKU、补货、售罄、库存数字变化、价格/付款周期/名称变化、下架、抓取失败保留旧状态、
-布尔库存不伪报数字变化、八个内置 Provider 的发现与完整目录保护，以及四种规则解析。
+布尔库存不伪报数字变化、Misaka 的全球目录与港台日分层策略、九个内置 Provider 的发现与
+完整目录保护，以及四种规则解析。
 
 ## systemd 服务
 
 [`deploy/vps-stock-watch.service`](deploy/vps-stock-watch.service) 使用当前正式项目路径
-`/root/projects/vps-stock-watch/vps-stock-watch`，并只允许服务写入项目的 `data/`。
+`/root/projects/vps-stock-watch/vps-stock-watch`，并只允许服务写入项目的 `data/`。DMIT 的
+headed Chromium 回退还需要系统安装 `xvfb` 和 `xauth`；
+[`deploy/20-memory-guard.conf`](deploy/20-memory-guard.conf) 为同一服务设置 600M soft limit
+和 700M hard limit。
 Chromium 位于 unit 指定的共享路径：
 
 ```bash
@@ -352,6 +376,8 @@ unit 中的项目路径，然后安装并启用同一个服务：
 
 ```bash
 sudo cp deploy/vps-stock-watch.service /etc/systemd/system/
+sudo install -d /etc/systemd/system/vps-stock-watch.service.d
+sudo cp deploy/20-memory-guard.conf /etc/systemd/system/vps-stock-watch.service.d/
 sudo systemctl daemon-reload
 sudo systemctl enable --now vps-stock-watch.service
 ```

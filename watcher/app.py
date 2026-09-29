@@ -158,8 +158,15 @@ class WatcherApp:
         LOG.info("checking provider=%s", provider.name)
         try:
             products = provider.fetch_products()
-            provider.validate_snapshot(products, self.store.provider(provider.name))
+            previous_state = self.store.provider(provider.name)
+            provider.validate_snapshot(products, previous_state)
+            additional_changes = provider.additional_changes(products, previous_state)
             first_run, changes = self.store.record_success(provider.name, products)
+            provider.update_state_after_success(
+                self.store.provider(provider.name), products
+            )
+            if not first_run:
+                changes.extend(additional_changes)
             self.store.save()
             LOG.info(
                 "provider=%s success products=%d baseline=%s changes=%d",

@@ -144,11 +144,18 @@ def available_products(provider_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         result,
         key=lambda item: (
             1 if is_hidden_inventory(item) else 0,
+            _stock_sort_order(item),
             str(item.get("category") or "").casefold(),
             str(item.get("name") or "").casefold(),
             str(item.get("product_id") or ""),
         ),
     )
+
+
+def _stock_sort_order(item: Dict[str, Any]) -> int:
+    metadata = item.get("metadata")
+    value = metadata.get("sort_order") if isinstance(metadata, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else 9999
 
 
 def format_stock_menu(state: Dict[str, Any], provider_names: List[str]) -> str:
@@ -411,12 +418,25 @@ def format_interval_invalid(minimum: int, maximum: int) -> str:
 def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
     product, old = change.product, change.old
     provider = _provider_name(product.provider)
+    if (
+        change.type == ChangeType.NEW
+        and product.metadata.get("catalog_event") == "region"
+    ):
+        return "\n".join(
+            [
+                "<b>🌏 %s 发现新地区</b>" % html.escape(provider),
+                "",
+                "地区：%s" % html.escape(product.name),
+                "Region ID：%s" % html.escape(product.product_id),
+            ]
+        )
     headings = {
         ChangeType.NEW: "🆕 %s 发现新品" % provider,
         ChangeType.RESTOCK: "🔥 %s 补货" % provider,
         ChangeType.SOLD_OUT: "🔴 %s 售罄" % provider,
         ChangeType.STOCK: "📦 %s 库存变化" % provider,
         ChangeType.PRICE: "💰 %s 价格变化" % provider,
+        ChangeType.PROMOTION: _promotion_heading(provider, product, old),
         ChangeType.NAME: "✏️ %s 商品名称变化" % provider,
         ChangeType.REMOVED: "🗑 %s 商品下架" % provider,
     }
@@ -441,6 +461,15 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
         lines.append("状态：有货 → 无货")
     elif product.available is not None:
         lines.append("状态：%s" % ("有货" if product.available else "无货"))
+    elif (
+        change.type == ChangeType.NEW
+        and product.metadata.get("catalog_only")
+        and isinstance(product.metadata.get("catalog_available"), bool)
+    ):
+        lines.append(
+            "状态：%s"
+            % ("有货" if product.metadata["catalog_available"] else "无货")
+        )
     if old and "stock" in change.fields:
         lines.append("库存：%s → %s" % (old.stock, product.stock))
     elif product.stock is not None:
@@ -453,6 +482,31 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
                 "付款周期变化：%s → %s"
                 % (_shown(old.billing_cycle), _shown(product.billing_cycle))
             )
+        if "pricing" in change.fields:
+            cycles = sorted(set(old.pricing) | set(product.pricing))
+            for cycle in cycles:
+                if old.pricing.get(cycle) != product.pricing.get(cycle):
+                    lines.append(
+                        "%s价格：%s → %s"
+                        % (
+                            _cycle_label(cycle),
+                            _shown(old.pricing.get(cycle)),
+                            _shown(product.pricing.get(cycle)),
+                        )
+                    )
+    if change.type == ChangeType.PROMOTION and old:
+        for field, label in (
+            ("original_price", "原价"),
+            ("sale_price", "促销价"),
+            ("discount_amount", "优惠金额"),
+            ("discount_percentage", "优惠比例"),
+            ("promotion", "促销"),
+        ):
+            if field in change.fields:
+                lines.append(
+                    "%s：%s → %s"
+                    % (label, _shown(getattr(old, field)), _shown(getattr(product, field)))
+                )
     if change.type == ChangeType.NEW and _suspicious(product, suspicious_keywords):
         lines.extend(["", "⚠️ 疑似测试商品"])
     if product.url:
@@ -499,10 +553,26 @@ def format_status(
                 "状态：%s" % ("正常" if provider_healthy else "异常或尚未完成首次检查"),
                 "最近检查：%s" % _time(provider.get("last_check_at")),
                 "最近成功：%s" % _time(provider.get("last_success_at")),
-                "商品：%s" % len(provider_products),
-                "有货：%s" % provider_available,
             ]
         )
+        stats = provider.get("catalog_stats")
+        if name == "misaka" and isinstance(stats, dict):
+            lines.extend(
+                [
+                    "重点地区：%s" % html.escape(" / ".join(stats.get("focus_regions", []))),
+                    "重点商品：%s" % stats.get("focused_products", 0),
+                    "当前有货：%s" % stats.get("focused_available", 0),
+                    "全球地区：%s" % stats.get("global_regions", 0),
+                    "全球 Catalog 商品：%s" % stats.get("global_products", 0),
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "商品：%s" % len(provider_products),
+                    "有货：%s" % provider_available,
+                ]
+            )
         if provider_intervals and name in provider_intervals:
             lines.append("扫描间隔：%s 秒" % provider_intervals[name])
         lines.append("最近错误：%s" % html.escape(str(provider.get("last_error") or "无")))
@@ -516,6 +586,43 @@ def _append(lines: List[str], label: str, value: Optional[str]) -> None:
 
 def _shown(value: Optional[str]) -> str:
     return html.escape(str(value)) if value is not None else "未提供"
+
+
+def _promotion_active(product: Optional[Product]) -> bool:
+    if product is None:
+        return False
+    return any(
+        getattr(product, field)
+        for field in (
+            "original_price",
+            "sale_price",
+            "discount_amount",
+            "discount_percentage",
+            "promotion",
+        )
+    )
+
+
+def _promotion_heading(
+    provider: str, product: Product, old: Optional[Product]
+) -> str:
+    before = _promotion_active(old)
+    after = _promotion_active(product)
+    if not before and after:
+        action = "开始促销"
+    elif before and not after:
+        action = "促销结束"
+    else:
+        action = "折扣变化"
+    return "🏷️ %s %s" % (provider, action)
+
+
+def _cycle_label(value: str) -> str:
+    return {
+        "monthly": "月付",
+        "semiannual": "半年付",
+        "annual": "年付",
+    }.get(value, value)
 
 
 def _suspicious(product: Product, keywords: Iterable[str]) -> bool:
@@ -559,4 +666,5 @@ def _provider_name(value: str) -> str:
         "leikwanhost": "LeiKwanHost",
         "liqunhuiju": "利群汇聚",
         "vmsilo": "VMSILO",
+        "misaka": "Misaka",
     }.get(value, value.title())

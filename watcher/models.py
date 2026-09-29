@@ -19,6 +19,12 @@ class Product:
     url: Optional[str] = None
     specs: Dict[str, str] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    pricing: Dict[str, str] = field(default_factory=dict)
+    original_price: Optional[str] = None
+    sale_price: Optional[str] = None
+    discount_amount: Optional[str] = None
+    discount_percentage: Optional[str] = None
+    promotion: Optional[str] = None
 
     @property
     def key(self) -> str:
@@ -39,6 +45,7 @@ class ChangeType(str, Enum):
     SOLD_OUT = "sold_out"
     STOCK = "stock"
     PRICE = "price"
+    PROMOTION = "promotion"
     NAME = "name"
     REMOVED = "removed"
 
@@ -49,4 +56,3 @@ class Change:
     product: Product
     old: Optional[Product] = None
     fields: List[str] = field(default_factory=list)
-

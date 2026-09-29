@@ -42,12 +42,29 @@ def compare_products(previous: Iterable[Product], current: Iterable[Product]) ->
 
         if stock_changed and not availability_changed:
             changes.append(Change(ChangeType.STOCK, new, old, ["stock"]))
+        promotion_fields = []
+        for field in (
+            "original_price",
+            "sale_price",
+            "discount_amount",
+            "discount_percentage",
+            "promotion",
+        ):
+            if getattr(old, field) != getattr(new, field):
+                promotion_fields.append(field)
+        if promotion_fields:
+            changes.append(
+                Change(ChangeType.PROMOTION, new, old, promotion_fields)
+            )
+
         price_fields = []
         if old.price != new.price:
             price_fields.append("price")
         if old.billing_cycle != new.billing_cycle:
             price_fields.append("billing_cycle")
-        if price_fields:
+        if old.pricing != new.pricing:
+            price_fields.append("pricing")
+        if price_fields and not promotion_fields:
             changes.append(Change(ChangeType.PRICE, new, old, price_fields))
         if old.name != new.name:
             changes.append(Change(ChangeType.NAME, new, old, ["name"]))
