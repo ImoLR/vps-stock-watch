@@ -61,6 +61,43 @@ class TelegramFormattingTests(unittest.TestCase):
             '["message","callback_query"]',
         )
 
+    def test_get_updates_409_includes_safe_api_diagnostics(self):
+        client = TelegramClient("secret-token", "123")
+        response = Mock()
+        response.status_code = 409
+        response.json.return_value = {
+            "ok": False,
+            "error_code": 409,
+            "description": (
+                "Conflict: terminated by other getUpdates request; "
+                "token=secret-token"
+            ),
+        }
+        with patch.object(client.session, "get", return_value=response):
+            with self.assertRaises(TelegramError) as caught:
+                client.commands(7)
+        error = caught.exception
+        self.assertEqual(error.status, 409)
+        self.assertEqual(error.error_code, 409)
+        self.assertIn("terminated by other getUpdates request", str(error))
+        self.assertNotIn("secret-token", str(error))
+        self.assertNotIn("api.telegram.org", str(error))
+
+    def test_send_api_error_includes_code_and_description(self):
+        client = TelegramClient("secret-token", "123")
+        response = Mock()
+        response.status_code = 400
+        response.json.return_value = {
+            "ok": False,
+            "error_code": 400,
+            "description": "Bad Request: message text is empty",
+        }
+        with patch.object(client.session, "post", return_value=response):
+            with self.assertRaises(TelegramError) as caught:
+                client.send("hello")
+        self.assertIn("error_code=400", str(caught.exception))
+        self.assertIn("message text is empty", str(caught.exception))
+
     def test_send_supports_inline_keyboard(self):
         client = TelegramClient("secret-token", "123")
         response = Mock()

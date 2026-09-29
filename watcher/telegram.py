@@ -15,11 +15,22 @@ LOG = logging.getLogger(__name__)
 
 
 class TelegramError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        status: Optional[int] = None,
+        error_code: Optional[int] = None,
+        description: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.status = status
+        self.error_code = error_code
+        self.description = description
 
 
 class TelegramClient:
     def __init__(self, token: str, chat_id: str, timeout: int = 20):
+        self._token = token
         self.chat_id = str(chat_id)
         self.timeout = timeout
         self.base_url = "https://api.telegram.org/bot%s" % token
@@ -61,8 +72,10 @@ class TelegramClient:
         except (requests.RequestException, ValueError) as exc:
             # requests exceptions can contain the full bot-token URL.
             raise TelegramError("Telegram request failed (%s)" % type(exc).__name__) from None
+        if not isinstance(payload, dict):
+            raise TelegramError("Telegram request failed: invalid JSON response")
         if response.status_code >= 400 or not payload.get("ok"):
-            raise TelegramError("Telegram request failed: HTTP %s" % response.status_code)
+            raise self._api_error("Telegram request failed", response.status_code, payload)
         return payload.get("result")
 
     def commands(self, offset: int) -> List[Dict[str, Any]]:
@@ -79,9 +92,42 @@ class TelegramClient:
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             raise TelegramError("Telegram getUpdates failed (%s)" % type(exc).__name__) from None
+        if not isinstance(payload, dict):
+            raise TelegramError("Telegram getUpdates failed: invalid JSON response")
         if response.status_code >= 400 or not payload.get("ok"):
-            raise TelegramError("Telegram getUpdates failed: HTTP %s" % response.status_code)
+            raise self._api_error(
+                "Telegram getUpdates failed", response.status_code, payload
+            )
         return list(payload.get("result", []))
+
+    def _api_error(
+        self, context: str, status: int, payload: Dict[str, Any]
+    ) -> TelegramError:
+        raw_code = payload.get("error_code")
+        error_code = (
+            raw_code
+            if isinstance(raw_code, int) and not isinstance(raw_code, bool)
+            else None
+        )
+        raw_description = payload.get("description")
+        description = self._sanitize_description(raw_description)
+        details = ["HTTP %s" % status]
+        if error_code is not None:
+            details.append("error_code=%s" % error_code)
+        if description:
+            details.append("description=%s" % description)
+        return TelegramError(
+            "%s: %s" % (context, "; ".join(details)),
+            status=status,
+            error_code=error_code,
+            description=description or None,
+        )
+
+    def _sanitize_description(self, value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        clean = " ".join(value.replace(self._token, "[redacted]").split())
+        return clean[:500]
 
     def set_commands(self, commands: List[Dict[str, str]]) -> None:
         self._post("setMyCommands", {"commands": commands})

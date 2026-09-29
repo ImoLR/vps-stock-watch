@@ -61,6 +61,10 @@ providers:
     catalog_url: https://www.dmit.io/cart.php
     interval_seconds: 120
     timeout_seconds: 35
+    isolate_process: true
+    scan_timeout_seconds: 75
+    scan_memory_high_mb: 480
+    scan_memory_max_mb: 600
     max_backoff_seconds: 1800
     fetch_mode: auto
     # DMIT blocks Chromium's headless signature on the currently tested host.
@@ -68,6 +72,7 @@ providers:
     browser_headless: false
     browser_args:
       - --disable-blink-features=AutomationControlled
+      - --renderer-process-limit=2
     browser_wait_selector: .cart-products-box[pid]
     browser_wait_state: attached
     browser_settle_ms: 1500

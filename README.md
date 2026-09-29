@@ -366,18 +366,20 @@ TELEGRAM_CHAT_ID=123456789
 .venv/bin/python -m unittest discover -v
 ```
 
-测试不访问真实商家，也不调用 Telegram。当前完整测试集为 188 项，覆盖首次基线、新
+测试不访问真实商家，也不调用 Telegram。当前完整测试集为 195 项，覆盖首次基线、新
 SKU、补货、售罄、库存数字变化、价格/付款周期/名称变化、下架、抓取失败保留旧状态、
 布尔库存不伪报数字变化、Misaka 的全球目录与港台日分层策略、九个内置 Provider 的发现与
-完整目录保护，以及四种规则解析。
+完整目录保护、DMIT 调度/进程/超时隔离、Telegram API 错误脱敏，以及四种规则解析。
 
 ## systemd 服务
 
 [`deploy/vps-stock-watch.service`](deploy/vps-stock-watch.service) 使用当前正式项目路径
 `/root/projects/vps-stock-watch/vps-stock-watch`，并只允许服务写入项目的 `data/`。DMIT 的
 headed Chromium 回退还需要系统安装 `xvfb` 和 `xauth`；
-[`deploy/20-memory-guard.conf`](deploy/20-memory-guard.conf) 为同一服务设置 600M soft limit
-和 700M hard limit。
+[`deploy/20-memory-guard.conf`](deploy/20-memory-guard.conf) 为同一服务设置 750M soft limit
+和 850M hard limit，并将 watcher 放在委派的叶 cgroup。DMIT 扫描使用独立临时子 cgroup，
+其 480M soft limit 与 600M hard limit 由 `config.yaml` 控制；扫描超时或 OOM 只清理该轮
+浏览器，不会停止 watcher 主循环。
 Chromium 位于 unit 指定的共享路径：
 
 ```bash

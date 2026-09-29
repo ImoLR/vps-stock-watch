@@ -5,11 +5,15 @@ import logging
 import re
 import signal
 import sys
+import threading
 import time
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from .config import load_config, telegram_credentials
+from .isolated_scan import fetch_products_isolated, terminate_active_scans
+from .models import Product
 from .providers import build_provider
 from .providers.base import BaseProvider
 from .route_watch import (
@@ -75,9 +79,12 @@ class WatcherApp:
             "suspicious_keywords", ["test", "beta", "internal", "do not buy", "测试"]
         )
         self.stopping = False
+        self._lock = threading.RLock()
+        self._telegram_lock = threading.Lock()
         self._clock = time.monotonic
         self._next_due = {provider.name: 0.0 for provider in self.providers}
         self._running = set()
+        self._provider_threads: Dict[str, threading.Thread] = {}
         self._pending_interval_provider: Optional[str] = None
         route_config = config.get("route_watch")
         self.route_config: Optional[Dict[str, Any]] = (
@@ -126,12 +133,15 @@ class WatcherApp:
         finally:
             if self.route_scheduler:
                 self.route_scheduler.stop()
+            terminate_active_scans()
+            self.wait_for_provider_workers(timeout=5)
 
     def configure_bot_commands(self) -> None:
         if not self.telegram:
             return
         try:
-            self.telegram.set_commands(BOT_COMMANDS)
+            with self._telegram_lock:
+                self.telegram.set_commands(BOT_COMMANDS)
             LOG.info("configured Telegram bot commands")
         except TelegramError as exc:
             LOG.warning("cannot configure Telegram bot commands: %s", exc)
@@ -139,40 +149,81 @@ class WatcherApp:
     def run_scheduled_step(self, now: Optional[float] = None) -> None:
         current = self._clock() if now is None else now
         for provider in self.providers:
-            if current < self._next_due[provider.name] or provider.name in self._running:
-                continue
-            self._running.add(provider.name)
+            with self._lock:
+                if (
+                    current < self._next_due[provider.name]
+                    or provider.name in self._running
+                ):
+                    continue
+                self._running.add(provider.name)
+                thread = threading.Thread(
+                    target=self._run_provider_worker,
+                    args=(provider,),
+                    name="provider-%s" % provider.name,
+                    daemon=True,
+                )
+                self._provider_threads[provider.name] = thread
             try:
-                ok = self.check(provider)
-            finally:
-                self._running.remove(provider.name)
-            failures = int(self.store.provider(provider.name).get("consecutive_failures", 0))
-            normal = self.provider_interval(provider.name)
-            if ok:
-                delay = normal
-            else:
-                maximum = int(provider.config.get("max_backoff_seconds", 1800))
-                delay = min(maximum, normal * (2 ** min(failures - 1, 6)))
-            self._schedule(provider.name, delay)
-            self.store.save()
+                thread.start()
+            except Exception:
+                with self._lock:
+                    self._running.discard(provider.name)
+                    self._provider_threads.pop(provider.name, None)
+                raise
+
+    def _run_provider_worker(self, provider: BaseProvider) -> None:
+        try:
+            ok = self.check(provider)
+            with self._lock:
+                failures = int(
+                    self.store.provider(provider.name).get("consecutive_failures", 0)
+                )
+                normal = self.provider_interval(provider.name)
+                if ok:
+                    delay = normal
+                else:
+                    maximum = int(provider.config.get("max_backoff_seconds", 1800))
+                    delay = min(maximum, normal * (2 ** min(failures - 1, 6)))
+                self._schedule(provider.name, delay)
+                self.store.save()
+        except Exception:
+            LOG.exception("provider=%s scheduler worker failed", provider.name)
+        finally:
+            with self._lock:
+                self._running.discard(provider.name)
+                self._provider_threads.pop(provider.name, None)
+
+    def wait_for_provider_workers(self, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                threads = list(self._provider_threads.values())
+            if not threads:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            for thread in threads:
+                thread.join(timeout=min(remaining, 0.1))
 
     def provider_interval(self, name: str) -> int:
-        configured = next(
-            (
-                item.config.get("interval_seconds", self.default_interval)
-                for item in self.providers
-                if item.name == name
-            ),
-            self.default_interval,
-        )
-        override = self.store.provider_intervals().get(name)
-        if (
-            isinstance(override, int)
-            and not isinstance(override, bool)
-            and MIN_SCAN_INTERVAL <= override <= MAX_SCAN_INTERVAL
-        ):
-            return override
-        return max(MIN_SCAN_INTERVAL, min(MAX_SCAN_INTERVAL, int(configured)))
+        with self._lock:
+            configured = next(
+                (
+                    item.config.get("interval_seconds", self.default_interval)
+                    for item in self.providers
+                    if item.name == name
+                ),
+                self.default_interval,
+            )
+            override = self.store.provider_intervals().get(name)
+            if (
+                isinstance(override, int)
+                and not isinstance(override, bool)
+                and MIN_SCAN_INTERVAL <= override <= MAX_SCAN_INTERVAL
+            ):
+                return override
+            return max(MIN_SCAN_INTERVAL, min(MAX_SCAN_INTERVAL, int(configured)))
 
     def provider_intervals(self) -> Dict[str, int]:
         return {provider.name: self.provider_interval(provider.name) for provider in self.providers}
@@ -186,30 +237,34 @@ class WatcherApp:
             or not MIN_SCAN_INTERVAL <= seconds <= MAX_SCAN_INTERVAL
         ):
             raise ValueError("interval is outside the allowed range")
-        self.store.set_provider_interval(name, seconds)
-        self._schedule(name, seconds)
-        self.store.save()
+        with self._lock:
+            self.store.set_provider_interval(name, seconds)
+            self._schedule(name, seconds)
+            self.store.save()
 
     def _schedule(self, name: str, delay: int) -> None:
-        self._next_due[name] = self._clock() + delay
-        self.store.provider(name)["next_check_at"] = (
-            datetime.now(timezone.utc) + timedelta(seconds=delay)
-        ).isoformat().replace("+00:00", "Z")
+        with self._lock:
+            self._next_due[name] = self._clock() + delay
+            self.store.provider(name)["next_check_at"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=delay)
+            ).isoformat().replace("+00:00", "Z")
 
     def check(self, provider: BaseProvider) -> bool:
         LOG.info("checking provider=%s", provider.name)
         try:
-            products = provider.fetch_products()
-            previous_state = self.store.provider(provider.name)
+            products = self._fetch_products(provider)
+            with self._lock:
+                previous_state = deepcopy(self.store.provider(provider.name))
             provider.validate_snapshot(products, previous_state)
             additional_changes = provider.additional_changes(products, previous_state)
-            first_run, changes = self.store.record_success(provider.name, products)
-            provider.update_state_after_success(
-                self.store.provider(provider.name), products
-            )
-            if not first_run:
-                changes.extend(additional_changes)
-            self.store.save()
+            with self._lock:
+                first_run, changes = self.store.record_success(provider.name, products)
+                provider.update_state_after_success(
+                    self.store.provider(provider.name), products
+                )
+                if not first_run:
+                    changes.extend(additional_changes)
+                self.store.save()
             LOG.info(
                 "provider=%s success products=%d baseline=%s changes=%d",
                 provider.name,
@@ -231,41 +286,56 @@ class WatcherApp:
                 message = format_change(change, self.suspicious_keywords)
                 if self.telegram:
                     try:
-                        self.telegram.send(message)
+                        with self._telegram_lock:
+                            self.telegram.send(message)
                     except TelegramError:
                         LOG.exception("notification failed provider=%s product=%s", provider.name, change.product.key)
                         continue
-                    self.store.increment_notifications()
-                    self.store.save()
+                    with self._lock:
+                        self.store.increment_notifications()
+                        self.store.save()
                 else:
                     LOG.info("notification disabled: %s", message.replace("\n", " | "))
             return True
         except Exception as exc:
             LOG.exception("provider=%s check failed", provider.name)
-            self.store.record_failure(provider.name, "%s: %s" % (type(exc).__name__, exc))
-            self.store.save()
+            with self._lock:
+                self.store.record_failure(
+                    provider.name, "%s: %s" % (type(exc).__name__, exc)
+                )
+                self.store.save()
             return False
+
+    @staticmethod
+    def _fetch_products(provider: BaseProvider) -> List[Product]:
+        if provider.config.get("isolate_process", False):
+            return fetch_products_isolated(provider.config)
+        return provider.fetch_products()
 
     def poll_commands(self) -> None:
         if not self.telegram:
             return
-        offset = int(self.store.data.get("telegram_update_offset", 0))
+        with self._lock:
+            offset = int(self.store.data.get("telegram_update_offset", 0))
         try:
-            updates = self.telegram.commands(offset)
+            with self._telegram_lock:
+                updates = self.telegram.commands(offset)
         except TelegramError as exc:
             LOG.warning("cannot poll Telegram commands: %s", exc)
             return
         for update in updates:
             update_id = int(update.get("update_id", 0))
-            self.store.data["telegram_update_offset"] = max(
-                int(self.store.data.get("telegram_update_offset", 0)), update_id + 1
-            )
             try:
                 self.process_update(update)
             except TelegramError as exc:
                 LOG.warning("cannot process Telegram update: %s", exc)
-        if updates:
-            self.store.save()
+            finally:
+                with self._lock:
+                    self.store.data["telegram_update_offset"] = max(
+                        int(self.store.data.get("telegram_update_offset", 0)),
+                        update_id + 1,
+                    )
+                    self.store.save()
 
     def process_update(self, update: Dict[str, Any]) -> None:
         if not self.telegram:
@@ -321,9 +391,11 @@ class WatcherApp:
         chat_id = str((message.get("chat") or {}).get("id", ""))
         user_id = str((callback.get("from") or {}).get("id", ""))
         if not self._authorized(chat_id, user_id):
-            self.telegram.answer_callback(callback_id, "无权限", show_alert=True)
+            with self._telegram_lock:
+                self.telegram.answer_callback(callback_id, "无权限", show_alert=True)
             return
-        self.telegram.answer_callback(callback_id)
+        with self._telegram_lock:
+            self.telegram.answer_callback(callback_id)
         data = str(callback.get("data", ""))
         if data == INTERVAL_MENU_CALLBACK:
             self._pending_interval_provider = None
@@ -377,10 +449,13 @@ class WatcherApp:
 
     def send_status_menu(self) -> None:
         route_state = self._route_state(refresh_disk=True)
+        with self._lock:
+            state = self.store.snapshot()
+            intervals = self.provider_intervals()
         self._send_telegram(
             format_status(
-                self.store.snapshot(),
-                self.provider_intervals(),
+                state,
+                intervals,
                 route_state=route_state,
                 route_interval=(
                     int(self.route_config.get("interval_seconds", 1800))
@@ -431,7 +506,8 @@ class WatcherApp:
     def _stock_state(self, refresh_disk: bool) -> Dict[str, Any]:
         if refresh_disk:
             return StateStore(str(self.store.path)).snapshot()
-        return self.store.snapshot()
+        with self._lock:
+            return self.store.snapshot()
 
     def _send_interval_menu(self) -> None:
         names = [provider.name for provider in self.providers]
@@ -445,9 +521,11 @@ class WatcherApp:
     ) -> None:
         if not self.telegram:
             return
-        self.telegram.send(text, reply_markup=reply_markup)
-        self.store.increment_notifications()
-        self.store.save()
+        with self._telegram_lock:
+            self.telegram.send(text, reply_markup=reply_markup)
+        with self._lock:
+            self.store.increment_notifications()
+            self.store.save()
 
 
 def main(argv: Optional[List[str]] = None) -> int:

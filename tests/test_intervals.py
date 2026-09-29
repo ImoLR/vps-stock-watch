@@ -151,6 +151,7 @@ class IntervalMenuTests(unittest.TestCase):
         self.app.run_scheduled_step(now=116.9)
         self.assertEqual(calls, [])
         self.app.run_scheduled_step(now=117.0)
+        self.assertTrue(self.app.wait_for_provider_workers())
         self.assertEqual(calls, ["blossom"])
 
     def test_one_change_does_not_reschedule_other_providers(self):
@@ -179,6 +180,7 @@ class IntervalMenuTests(unittest.TestCase):
 
         self.app.check = checking
         self.app.run_scheduled_step(now=0.0)
+        self.assertTrue(self.app.wait_for_provider_workers())
         self.assertEqual(calls, ["nexkr"])
 
 
