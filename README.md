@@ -376,9 +376,9 @@ SKU、补货、售罄、库存数字变化、价格/付款周期/名称变化、
 [`deploy/vps-stock-watch.service`](deploy/vps-stock-watch.service) 使用当前正式项目路径
 `/root/projects/vps-stock-watch/vps-stock-watch`，并只允许服务写入项目的 `data/`。DMIT 的
 headed Chromium 回退还需要系统安装 `xvfb` 和 `xauth`；
-[`deploy/20-memory-guard.conf`](deploy/20-memory-guard.conf) 为同一服务设置 750M soft limit
-和 850M hard limit，并将 watcher 放在委派的叶 cgroup。DMIT 扫描使用独立临时子 cgroup，
-其 480M soft limit 与 600M hard limit 由 `config.yaml` 控制；扫描超时或 OOM 只清理该轮
+[`deploy/20-memory-guard.conf`](deploy/20-memory-guard.conf) 为同一服务设置 800M soft limit
+和 900M hard limit，并将 watcher 放在委派的叶 cgroup。DMIT 扫描使用独立临时子 cgroup，
+其 560M soft limit 与 650M hard limit 由 `config.yaml` 控制；扫描超时或 OOM 只清理该轮
 浏览器，不会停止 watcher 主循环。
 Chromium 位于 unit 指定的共享路径：
 
