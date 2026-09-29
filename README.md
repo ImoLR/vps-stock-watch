@@ -204,6 +204,21 @@ JSON 接口，不抓取渲染后的 UI，也不需要 Chromium。地区使用 AP
 `price_annual`，币种为 USD；当前 schema 没有原价、折扣或 promotion 字段，也没有正在
 进行的促销。完整扫描 43 个普通 GET，约 2.6–2.8 秒，默认间隔为 60 秒。
 
+Misaka Route Watch 与库存扫描完全独立，默认每 1800 秒使用
+[Misaka 官方 Looking Glass](https://misaka.ping.sx/) 的公开 WebSocket MTR，从香港、台湾、
+日本各自最高的已标注线路等级（当前均为 Premium Plus）主动测向广东电信、联通、移动
+三个固定 IPv4 目标。节点来自官方 probe directory，并与 `/api/mc2/regions` 的 speedtest
+地址交叉匹配；IPv6 只发现并保存，第一版不测量、不通知。线路状态单独原子写入
+`data/route_state.json`，不会与库存 state 互相覆盖。
+
+线路比较使用 Team Cymru DNS 查询得到的 ASN、组织和 prefix，并缓存结果；fingerprint 只取
+去重后的 ASN 序列，因此单个超时、接口 IP、同 ASN 内 hop 数或 RTT 抖动不会触发通知。
+首次成功只建立静默 baseline；新路径必须连续两轮相同才确认并通知，单次 candidate 恢复
+baseline 会被丢弃。LG、目标可达性、schema 或 ASN 覆盖率失败时保留旧 baseline，并把已取得
+的 raw attempt 仅作为诊断状态保存。Route scheduler 自带防重入和失败退避，不阻塞库存线程。
+`/status` 显示 Route Watch 健康信息，并提供“Misaka 当前线路”只读按钮；点击只读 state，
+不会立即发起 traceroute。
+
 参考结构：[NOAFF Restock Monitor](https://github.com/cshaizhihao/noaff-restock-monitor)
 的通用规则、WHMCS 和商品去重思想，以及
 [近期 DMIT 页面解析样例](https://github.com/Ra2fSt/dmit-monitor)。本项目代码为独立实现。
@@ -351,7 +366,7 @@ TELEGRAM_CHAT_ID=123456789
 .venv/bin/python -m unittest discover -v
 ```
 
-测试不访问真实商家，也不调用 Telegram。当前完整测试集为 174 项，覆盖首次基线、新
+测试不访问真实商家，也不调用 Telegram。当前完整测试集为 188 项，覆盖首次基线、新
 SKU、补货、售罄、库存数字变化、价格/付款周期/名称变化、下架、抓取失败保留旧状态、
 布尔库存不伪报数字变化、Misaka 的全球目录与港台日分层策略、九个内置 Provider 的发现与
 完整目录保护，以及四种规则解析。

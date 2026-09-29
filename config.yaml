@@ -1,6 +1,44 @@
 poll_interval_seconds: 60
 state_path: data/state.json
 
+route_watch:
+  enabled: true
+  state_path: data/route_state.json
+  interval_seconds: 1800
+  max_backoff_seconds: 7200
+  focus_regions:
+    - HK
+    - TW
+    - JP
+  directory_url: https://public-us-pingsx.api.clonoth.com/v2/probe/lg/misaka
+  websocket_url: wss://public-us-pingsx.api.clonoth.com/v2/probe/ws
+  origin: https://misaka.ping.sx
+  catalog_api_base: https://app.misaka.io/api/mc2
+  directory_timeout_seconds: 20
+  measurement_timeout_seconds: 120
+  asn_timeout_seconds: 5
+  minimum_asn_enrichment_ratio: 0.6
+  confirmation_count: 2
+  targets:
+    - id: telecom_guangdong
+      operator: China Telecom
+      label: 广东电信
+      ip: 202.96.128.86
+      expected_asn: AS4134
+      expected_prefix: 202.96.128.0/18
+    - id: unicom_guangdong
+      operator: China Unicom
+      label: 广东联通
+      ip: 210.21.196.6
+      expected_asn: AS17623
+      expected_prefix: 210.21.192.0/18
+    - id: mobile_guangdong
+      operator: China Mobile
+      label: 广东移动
+      ip: 211.136.192.6
+      expected_asn: AS56040
+      expected_prefix: 211.136.192.0/18
+
 suspicious_keywords:
   - test
   - beta

@@ -12,12 +12,19 @@ from typing import Any, Dict, List, Optional
 from .config import load_config, telegram_credentials
 from .providers import build_provider
 from .providers.base import BaseProvider
+from .route_watch import (
+    MisakaRouteWatcher,
+    RouteStateStore,
+    RouteWatchScheduler,
+)
 from .state import StateStore
 from .telegram import (
     BOT_COMMANDS,
     INTERVAL_BACK_CALLBACK,
     INTERVAL_MENU_CALLBACK,
     INTERVAL_PROVIDER_PREFIX,
+    ROUTE_BACK_CALLBACK,
+    ROUTE_STATUS_CALLBACK,
     STOCK_MENU_CALLBACK,
     STOCK_PROVIDER_PREFIX,
     TelegramClient,
@@ -28,12 +35,14 @@ from .telegram import (
     format_interval_prompt,
     format_interval_success,
     format_status,
+    format_route_status,
     format_stock_menu,
     format_stock_provider,
     interval_menu_markup,
     stock_menu_markup,
     stock_provider_markup,
     status_menu_markup,
+    route_status_markup,
 )
 
 
@@ -70,6 +79,33 @@ class WatcherApp:
         self._next_due = {provider.name: 0.0 for provider in self.providers}
         self._running = set()
         self._pending_interval_provider: Optional[str] = None
+        route_config = config.get("route_watch")
+        self.route_config: Optional[Dict[str, Any]] = (
+            route_config
+            if isinstance(route_config, dict) and route_config.get("enabled", False)
+            else None
+        )
+        self.route_store: Optional[RouteStateStore] = None
+        self.route_scheduler: Optional[RouteWatchScheduler] = None
+        if self.route_config:
+            self.route_store = RouteStateStore(str(self.route_config["state_path"]))
+            route_telegram = None
+            if notifications and credentials["token"] and credentials["chat_id"]:
+                route_telegram = TelegramClient(
+                    credentials["token"], credentials["chat_id"]
+                )
+            route_watcher = MisakaRouteWatcher(
+                self.route_config,
+                self.route_store,
+                notify=(
+                    (lambda message: route_telegram.send(message))
+                    if route_telegram
+                    else None
+                ),
+            )
+            self.route_scheduler = RouteWatchScheduler(
+                route_watcher, self.route_config
+            )
 
     def run_once(self) -> bool:
         success = True
@@ -80,10 +116,16 @@ class WatcherApp:
 
     def run_forever(self) -> None:
         self.configure_bot_commands()
-        while not self.stopping:
-            self.run_scheduled_step()
-            self.poll_commands()
-            time.sleep(2)
+        if self.route_scheduler:
+            self.route_scheduler.start()
+        try:
+            while not self.stopping:
+                self.run_scheduled_step()
+                self.poll_commands()
+                time.sleep(2)
+        finally:
+            if self.route_scheduler:
+                self.route_scheduler.stop()
 
     def configure_bot_commands(self) -> None:
         if not self.telegram:
@@ -289,6 +331,13 @@ class WatcherApp:
         elif data == INTERVAL_BACK_CALLBACK:
             self._pending_interval_provider = None
             self.send_status_menu()
+        elif data == ROUTE_BACK_CALLBACK:
+            self._pending_interval_provider = None
+            self.send_status_menu()
+        elif data == ROUTE_STATUS_CALLBACK and self.route_store:
+            self._pending_interval_provider = None
+            self.send_route_status(refresh_disk=True)
+            LOG.info("answered Telegram Misaka route status from state")
         elif data.startswith(INTERVAL_PROVIDER_PREFIX):
             name = data[len(INTERVAL_PROVIDER_PREFIX):]
             if name not in {provider.name for provider in self.providers}:
@@ -327,10 +376,36 @@ class WatcherApp:
         return bool(chat_id) and chat_id == self.telegram.chat_id and user_id == self.telegram.chat_id
 
     def send_status_menu(self) -> None:
+        route_state = self._route_state(refresh_disk=True)
         self._send_telegram(
-            format_status(self.store.snapshot(), self.provider_intervals()),
-            status_menu_markup(),
+            format_status(
+                self.store.snapshot(),
+                self.provider_intervals(),
+                route_state=route_state,
+                route_interval=(
+                    int(self.route_config.get("interval_seconds", 1800))
+                    if self.route_config
+                    else None
+                ),
+            ),
+            status_menu_markup(route_enabled=bool(self.route_config)),
         )
+
+    def send_route_status(self, refresh_disk: bool = False) -> None:
+        route_state = self._route_state(refresh_disk)
+        if route_state is None:
+            return
+        messages = format_route_status(route_state)
+        for index, text in enumerate(messages):
+            markup = route_status_markup() if index == len(messages) - 1 else None
+            self._send_telegram(text, markup)
+
+    def _route_state(self, refresh_disk: bool) -> Optional[Dict[str, Any]]:
+        if not self.route_store or not self.route_config:
+            return None
+        if refresh_disk:
+            return RouteStateStore(str(self.route_config["state_path"])).snapshot()
+        return self.route_store.snapshot()
 
     def send_stock_menu(self, refresh_disk: bool = False) -> None:
         state = self._stock_state(refresh_disk)

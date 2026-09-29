@@ -96,6 +96,8 @@ INTERVAL_BACK_CALLBACK = "scan_interval:back"
 INTERVAL_PROVIDER_PREFIX = "scan_interval:provider:"
 STOCK_MENU_CALLBACK = "stock:menu"
 STOCK_PROVIDER_PREFIX = "stock:provider:"
+ROUTE_STATUS_CALLBACK = "route:misaka"
+ROUTE_BACK_CALLBACK = "route:back"
 STOCK_MESSAGE_LIMIT = 3900
 
 BOT_COMMANDS = [
@@ -104,10 +106,22 @@ BOT_COMMANDS = [
 ]
 
 
-def status_menu_markup() -> Dict[str, Any]:
+def status_menu_markup(route_enabled: bool = False) -> Dict[str, Any]:
+    rows = []
+    if route_enabled:
+        rows.append(
+            [{"text": "🛣 Misaka 当前线路", "callback_data": ROUTE_STATUS_CALLBACK}]
+        )
+    rows.append(
+        [{"text": "⏱ 设置扫描间隔", "callback_data": INTERVAL_MENU_CALLBACK}]
+    )
+    return {"inline_keyboard": rows}
+
+
+def route_status_markup() -> Dict[str, Any]:
     return {
         "inline_keyboard": [
-            [{"text": "⏱ 设置扫描间隔", "callback_data": INTERVAL_MENU_CALLBACK}]
+            [{"text": "← 返回状态", "callback_data": ROUTE_BACK_CALLBACK}]
         ]
     }
 
@@ -515,7 +529,10 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
 
 
 def format_status(
-    state: Dict[str, Any], provider_intervals: Optional[Dict[str, int]] = None
+    state: Dict[str, Any],
+    provider_intervals: Optional[Dict[str, int]] = None,
+    route_state: Optional[Dict[str, Any]] = None,
+    route_interval: Optional[int] = None,
 ) -> str:
     providers = state.get("providers", {})
     all_products = [item for provider in providers.values() for item in provider.get("products", {}).values()]
@@ -566,6 +583,25 @@ def format_status(
                     "全球 Catalog 商品：%s" % stats.get("global_products", 0),
                 ]
             )
+            if isinstance(route_state, dict):
+                route_healthy = bool(route_state.get("last_success_at")) and not route_state.get(
+                    "last_error"
+                )
+                lines.extend(
+                    [
+                        "Route Watch：%s"
+                        % ("正常" if route_healthy else "异常或尚未完成首次检查"),
+                        "线路节点：%s" % len(route_state.get("nodes", {})),
+                        "最后线路检测：%s" % _time(route_state.get("last_success_at")),
+                        "最近线路变化：%s" % _time(route_state.get("last_change_at")),
+                    ]
+                )
+                if route_interval is not None:
+                    lines.append("线路扫描间隔：%s 秒" % route_interval)
+                lines.append(
+                    "最近线路错误：%s"
+                    % html.escape(str(route_state.get("last_error") or "无"))
+                )
         else:
             lines.extend(
                 [
@@ -577,6 +613,159 @@ def format_status(
             lines.append("扫描间隔：%s 秒" % provider_intervals[name])
         lines.append("最近错误：%s" % html.escape(str(provider.get("last_error") or "无")))
     return "\n".join(lines)
+
+
+def format_route_changes(changes: List[Any], operator_target_count: int) -> str:
+    first = changes[0]
+    node = first.node
+    operator = first.target.get("operator")
+    previous = first.previous
+    current = first.current
+    old_features = set(previous.get("features", []))
+    new_features = set(current.get("features", []))
+    feature_changes = ["+ %s" % item for item in sorted(new_features - old_features)]
+    feature_changes.extend("- %s" % item for item in sorted(old_features - new_features))
+    target_labels = "、".join(
+        str(change.target.get("label") or change.target.get("ip")) for change in changes
+    )
+    lines = [
+        "<b>🛣 Misaka 线路变化</b>",
+        "",
+        "节点：%s %s" % (html.escape(str(node.get("location"))), html.escape(str(node.get("level")))),
+        "Test IPv4：%s" % html.escape(str(node.get("test_ipv4"))),
+        "方向：回程（Misaka → 中国大陆）",
+        "运营商：%s" % html.escape(_operator_name(operator)),
+        "目标：%s" % html.escape(target_labels),
+        "",
+        "原路径：%s" % html.escape(_route_path(previous)),
+        "当前路径：%s" % html.escape(_route_path(current)),
+        "关键变化：%s" % html.escape("；".join(feature_changes) or "Transit ASN 路径改变"),
+        "一致性：%d/%d 个%s目标确认变化"
+        % (len(changes), max(operator_target_count, len(changes)), html.escape(_operator_name(operator))),
+    ]
+    old_rtt = previous.get("destination_rtt_ms")
+    new_rtt = current.get("destination_rtt_ms")
+    if old_rtt is not None or new_rtt is not None:
+        lines.append("目标延迟：%s → %s" % (_rtt(old_rtt), _rtt(new_rtt)))
+    lines.extend(["", "⚠️ 检测到经两次连续测量确认的回程线路特征变化"])
+    return "\n".join(lines)
+
+
+def format_route_status(
+    route_state: Dict[str, Any], max_length: int = STOCK_MESSAGE_LIMIT
+) -> List[str]:
+    initialized = bool(route_state.get("initialized"))
+    healthy = bool(route_state.get("last_success_at")) and not route_state.get("last_error")
+    header = "\n".join(
+        [
+            "<b>🛣 Misaka 当前线路</b>",
+            "",
+            "状态：%s"
+            % ("正常" if healthy else "异常或尚未完成首次检查"),
+            "方向：回程（Misaka → 中国大陆）",
+            "基线：%s" % ("已建立" if initialized else "尚未建立"),
+            "最后检测：%s" % _time(route_state.get("last_success_at")),
+            "最近变化：%s" % _time(route_state.get("last_change_at")),
+            "最近错误：%s" % html.escape(str(route_state.get("last_error") or "无")),
+        ]
+    )
+    nodes = route_state.get("nodes", {})
+    targets = route_state.get("targets", {})
+    routes = route_state.get("routes", {})
+    blocks = []
+    if isinstance(nodes, dict) and isinstance(routes, dict):
+        order = {"HK": 0, "TW": 1, "JP": 2}
+        for node_id, node in sorted(
+            nodes.items(),
+            key=lambda item: (order.get(str(item[1].get("country_code")), 99), str(item[0])),
+        ):
+            lines = [
+                "<b>%s · %s</b>"
+                % (html.escape(str(node.get("location"))), html.escape(str(node.get("level")))),
+                "Test IPv4：%s" % html.escape(str(node.get("test_ipv4"))),
+            ]
+            if node.get("test_ipv6"):
+                lines.append("Test IPv6（仅记录）：%s" % html.escape(str(node["test_ipv6"])))
+            matching = [
+                (key, value)
+                for key, value in routes.items()
+                if isinstance(value, dict) and str(value.get("node_id")) == str(node_id)
+            ]
+            for _key, route in sorted(
+                matching,
+                key=lambda item: str(
+                    targets.get(str(item[1].get("target_id")), {}).get("operator", "")
+                ),
+            ):
+                target = targets.get(str(route.get("target_id")), {})
+                snapshot = route.get("current") or route.get("baseline") or {}
+                lines.extend(
+                    [
+                        "",
+                        "%s · %s"
+                        % (
+                            html.escape(_operator_name(target.get("operator"))),
+                            html.escape(str(target.get("label") or target.get("ip") or "未知目标")),
+                        ),
+                        "ASN 路径：%s" % html.escape(_route_path(snapshot)),
+                        "线路特征：%s"
+                        % html.escape(" / ".join(snapshot.get("features", [])) or "未识别到已知特征"),
+                        "目标 RTT：%s" % _rtt(snapshot.get("destination_rtt_ms")),
+                    ]
+                )
+                candidate = route.get("candidate")
+                if isinstance(candidate, dict):
+                    lines.append(
+                        "候选变化：%s/%s 次"
+                        % (candidate.get("count", 0), 2)
+                    )
+            blocks.append("\n".join(lines))
+    if not blocks:
+        blocks = ["暂无已保存线路数据。"]
+    expanded_blocks = []
+    for block in blocks:
+        part = ""
+        for line in block.splitlines():
+            candidate = "%s\n%s" % (part, line) if part else line
+            if len(candidate) <= max_length:
+                part = candidate
+                continue
+            if part:
+                expanded_blocks.append(part)
+            while len(line) > max_length:
+                expanded_blocks.append(line[:max_length])
+                line = line[max_length:]
+            part = line
+        if part:
+            expanded_blocks.append(part)
+    messages = []
+    current = header
+    for block in expanded_blocks:
+        candidate = "%s\n\n%s" % (current, block)
+        if len(candidate) <= max_length:
+            current = candidate
+            continue
+        messages.append(current)
+        current = block
+    messages.append(current)
+    return messages
+
+
+def _route_path(snapshot: Dict[str, Any]) -> str:
+    path = snapshot.get("normalized_asn_path", []) if isinstance(snapshot, dict) else []
+    return " → ".join(str(item) for item in path) or "暂无"
+
+
+def _operator_name(value: Any) -> str:
+    return {
+        "China Telecom": "中国电信",
+        "China Unicom": "中国联通",
+        "China Mobile": "中国移动",
+    }.get(str(value), str(value or "未知"))
+
+
+def _rtt(value: Any) -> str:
+    return "%.2f ms" % float(value) if isinstance(value, (int, float)) else "暂无"
 
 
 def _append(lines: List[str], label: str, value: Optional[str]) -> None:

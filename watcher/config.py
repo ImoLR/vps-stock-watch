@@ -25,6 +25,18 @@ def load_config(path: str) -> Dict[str, Any]:
     config["state_path"] = str(
         (config_path.parent / str(config.get("state_path", "data/state.json"))).resolve()
     )
+    route_watch = config.get("route_watch")
+    if route_watch is not None:
+        if not isinstance(route_watch, dict):
+            raise ValueError("route_watch must be a mapping")
+        route_watch = dict(route_watch)
+        route_watch["state_path"] = str(
+            (
+                config_path.parent
+                / str(route_watch.get("state_path", "data/route_state.json"))
+            ).resolve()
+        )
+        config["route_watch"] = route_watch
     config["poll_interval_seconds"] = max(
         30, int(os.environ.get("POLL_INTERVAL_SECONDS", config.get("poll_interval_seconds", 60)))
     )
