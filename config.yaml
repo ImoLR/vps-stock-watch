@@ -59,13 +59,16 @@ providers:
     type: dmit
     enabled: true
     catalog_url: https://www.dmit.io/cart.php
-    interval_seconds: 120
+    interval_seconds: 60
     timeout_seconds: 35
     isolate_process: true
     scan_timeout_seconds: 75
-    scan_memory_high_mb: 560
-    scan_memory_max_mb: 650
-    max_backoff_seconds: 1800
+    scan_memory_high_mb: 700
+    scan_memory_max_mb: 800
+    failure_retry_seconds: 30
+    max_backoff_seconds: 300
+    selector_retry_attempts: 1
+    selector_retry_backoff_seconds: 2
     fetch_mode: auto
     # DMIT blocks Chromium's headless signature on the currently tested host.
     # Run the watcher under xvfb-run so Playwright can use headed mode.

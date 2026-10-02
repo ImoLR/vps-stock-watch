@@ -121,6 +121,25 @@ class IntervalMenuTests(unittest.TestCase):
         self.set_interval("blossom", 19)
         self.assertEqual(self.app.provider_intervals(), {"nexkr": 60, "dmit": 120, "blossom": 19})
 
+    def test_dmit_failure_retry_is_short_and_bounded(self):
+        self.app = self.make_app(
+            [
+                {
+                    "name": "dmit",
+                    "type": "dmit",
+                    "interval_seconds": 60,
+                    "failure_retry_seconds": 30,
+                    "max_backoff_seconds": 300,
+                }
+            ]
+        )
+        provider = self.app.providers[0]
+        delays = [
+            self.app._failure_delay(provider, count, 60)
+            for count in range(1, 7)
+        ]
+        self.assertEqual(delays, [30, 60, 120, 240, 300, 300])
+
     def test_arbitrary_legal_integer_is_saved_without_rounding(self):
         self.set_interval("blossom", 17)
         self.assertEqual(self.app.store.provider_intervals()["blossom"], 17)

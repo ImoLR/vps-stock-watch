@@ -101,6 +101,7 @@ class BaseProvider(ABC):
     def _get_text_browser(self, url: str) -> str:
         try:
             from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise FetchError(
@@ -111,6 +112,7 @@ class BaseProvider(ABC):
         browser = None
         context = None
         page = None
+        stage = "launch"
         try:
             with sync_playwright() as playwright:
                 headless = bool(self.config.get("browser_headless", True))
@@ -126,6 +128,7 @@ class BaseProvider(ABC):
                     context_options["user_agent"] = self.config["browser_user_agent"]
                 context = browser.new_context(**context_options)
                 page = context.new_page()
+                stage = "routing"
                 blocked_types = set(
                     self.config.get("browser_block_resource_types", ["image", "media", "font"])
                 )
@@ -138,18 +141,42 @@ class BaseProvider(ABC):
                             else route.continue_()
                         ),
                     )
+                stage = "page.goto"
                 page.goto(url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
                 selector = self.config.get("browser_wait_selector")
                 if selector:
+                    stage = "selector"
                     page.wait_for_selector(
                         selector,
                         state=str(self.config.get("browser_wait_state", "attached")),
                         timeout=self.timeout * 1000,
                     )
+                stage = "settle"
                 page.wait_for_timeout(int(self.config.get("browser_settle_ms", 1500)))
+                stage = "content"
                 text = page.content()
+        except PlaywrightTimeoutError as exc:
+            raise FetchError(
+                "browser %s timeout for %s: %s" % (stage, url, exc),
+                blocked=True,
+            ) from exc
         except PlaywrightError as exc:
-            raise FetchError("browser fetch failed for %s: %s" % (url, exc), blocked=True) from exc
+            message = str(exc)
+            lowered = message.lower()
+            if any(
+                value in lowered
+                for value in (
+                    "browser has been closed",
+                    "target page, context or browser has been closed",
+                    "crash",
+                )
+            ):
+                label = "browser crash"
+            else:
+                label = "browser %s failure" % stage
+            raise FetchError(
+                "%s for %s: %s" % (label, url, message), blocked=True
+            ) from exc
         finally:
             for resource in (page, context, browser):
                 if resource is None:

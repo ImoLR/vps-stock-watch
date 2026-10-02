@@ -53,8 +53,10 @@ DMIT 当前仍是 WHMCS 商城。目录主源是：
 HTTP，遇到 403/429/挑战页才启动 Playwright。2026-09-07 的真实验证表明 DMIT 同时
 拦截 Chromium headless 标识，但 Xvfb 中的 headed Chromium 能取得 HTTP 200 和完整目录；
 因此示例配置使用 `browser_headless: false`，运行命令通过 `xvfb-run` 提供虚拟显示器。
-若部署 IP 可直接取得正常 HTML，就完全不使用浏览器。没有发现比目录 HTML 更稳定的
-公开 JSON/REST/GraphQL 库存接口。
+若部署 IP 可直接取得正常 HTML，就完全不使用浏览器。2026-10-02 再次抓取页面网络记录：
+92 个商品卡片都来自服务端渲染的主 document，额外 XHR 只有 Cloudflare challenge/RUM，
+前端 Ajax 只处理配置价格和账户功能；仍未发现比目录 HTML 更稳定的公开 JSON/REST/GraphQL
+库存接口。selector timeout 会做一次有界重试，其他错误留给调度器按类型记录和退避。
 
 ### Blossom Host
 
@@ -251,7 +253,8 @@ baseline 会被丢弃。LG、目标可达性、schema 或 ASN 覆盖率失败时
 - 上一份完整目录中存在、当前完整目录消失：商品下架。
 
 HTTP/解析失败只更新 Provider 错误和退避计数，不覆盖旧商品快照，也不会制造“全部
-下架”。连续失败按 Provider 间隔指数退避，最高由 `max_backoff_seconds` 控制。
+下架”。连续失败从 Provider 的 `failure_retry_seconds`（未配置时使用正常间隔）开始指数
+退避，最高由 `max_backoff_seconds` 控制。DMIT 当前为 30、60、120、240、300 秒封顶。
 
 统一模型示例：
 
@@ -300,7 +303,8 @@ PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" \
 ```
 
 默认全局间隔 60 秒；`POLL_INTERVAL_SECONDS` 可覆盖全局默认，Provider 自己的
-`interval_seconds` 优先。示例中 DMIT 为 120 秒，以降低目录和浏览器请求压力。
+`interval_seconds` 优先。DMIT 当前为 60 秒，以降低两分钟内短补货完全漏掉的概率；
+不要设置成 10 秒等高频值，以免对商城和 Cloudflare 造成不必要压力。
 
 ## Telegram
 
@@ -366,7 +370,7 @@ TELEGRAM_CHAT_ID=123456789
 .venv/bin/python -m unittest discover -v
 ```
 
-测试不访问真实商家，也不调用 Telegram。当前完整测试集为 195 项，覆盖首次基线、新
+测试不访问真实商家，也不调用 Telegram。当前完整测试集为 198 项，覆盖首次基线、新
 SKU、补货、售罄、库存数字变化、价格/付款周期/名称变化、下架、抓取失败保留旧状态、
 布尔库存不伪报数字变化、Misaka 的全球目录与港台日分层策略、九个内置 Provider 的发现与
 完整目录保护、DMIT 调度/进程/超时隔离、Telegram API 错误脱敏，以及四种规则解析。
@@ -378,7 +382,7 @@ SKU、补货、售罄、库存数字变化、价格/付款周期/名称变化、
 headed Chromium 回退还需要系统安装 `xvfb` 和 `xauth`；
 [`deploy/20-memory-guard.conf`](deploy/20-memory-guard.conf) 为同一服务设置 800M soft limit
 和 900M hard limit，并将 watcher 放在委派的叶 cgroup。DMIT 扫描使用独立临时子 cgroup，
-其 560M soft limit 与 650M hard limit 由 `config.yaml` 控制；扫描超时或 OOM 只清理该轮
+其 700M soft limit 与 800M hard limit 由 `config.yaml` 控制；扫描超时或 OOM 只清理该轮
 浏览器，不会停止 watcher 主循环。
 Chromium 位于 unit 指定的共享路径：
 

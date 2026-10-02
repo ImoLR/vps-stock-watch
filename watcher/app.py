@@ -182,8 +182,7 @@ class WatcherApp:
                 if ok:
                     delay = normal
                 else:
-                    maximum = int(provider.config.get("max_backoff_seconds", 1800))
-                    delay = min(maximum, normal * (2 ** min(failures - 1, 6)))
+                    delay = self._failure_delay(provider, failures, normal)
                 self._schedule(provider.name, delay)
                 self.store.save()
         except Exception:
@@ -205,6 +204,20 @@ class WatcherApp:
                 return False
             for thread in threads:
                 thread.join(timeout=min(remaining, 0.1))
+
+    @staticmethod
+    def _failure_delay(provider: BaseProvider, failures: int, normal: int) -> int:
+        """Return a bounded provider-specific retry delay after a failed scan."""
+        retry_base = max(
+            MIN_SCAN_INTERVAL,
+            int(provider.config.get("failure_retry_seconds", normal)),
+        )
+        maximum = max(
+            retry_base,
+            int(provider.config.get("max_backoff_seconds", 1800)),
+        )
+        exponent = max(0, min(int(failures) - 1, 6))
+        return min(maximum, retry_base * (2 ** exponent))
 
     def provider_interval(self, name: str) -> int:
         with self._lock:

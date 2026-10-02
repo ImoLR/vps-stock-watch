@@ -1,25 +1,53 @@
 from __future__ import annotations
 
+import logging
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup, Tag
 
 from ..models import Product
-from .base import BaseProvider, ParseError
+from .base import BaseProvider, FetchError, ParseError
+
+
+LOG = logging.getLogger(__name__)
 
 
 class DmitProvider(BaseProvider):
     CATALOG_URL = "https://www.dmit.io/cart.php"
 
     def fetch_products(self) -> List[Product]:
-        fetch_mode = str(self.config.get("fetch_mode", "auto")).lower()
-        html = self.get_text(
-            str(self.config.get("catalog_url", self.CATALOG_URL)),
-            allow_browser=fetch_mode in ("auto", "browser"),
-        )
+        html = self._fetch_catalog_html()
         products = self.parse_catalog(html)
         return self._merge_extra_pid_probes(products)
+
+    def _fetch_catalog_html(self) -> str:
+        fetch_mode = str(self.config.get("fetch_mode", "auto")).lower()
+        url = str(self.config.get("catalog_url", self.CATALOG_URL))
+        retries = max(0, int(self.config.get("selector_retry_attempts", 0)))
+        delay = max(
+            0.0,
+            float(self.config.get("selector_retry_backoff_seconds", 1)),
+        )
+        for attempt in range(retries + 1):
+            try:
+                return self.get_text(
+                    url,
+                    allow_browser=fetch_mode in ("auto", "browser"),
+                )
+            except FetchError as exc:
+                retryable = "selector timeout" in str(exc).lower()
+                if not retryable or attempt >= retries:
+                    raise
+                LOG.warning(
+                    "dmit selector timeout; bounded retry %d/%d",
+                    attempt + 1,
+                    retries,
+                )
+                if delay:
+                    time.sleep(delay)
+        raise FetchError("DMIT catalog retry loop exhausted")
 
     def parse_catalog(self, html: str) -> List[Product]:
         soup = BeautifulSoup(html, "lxml")

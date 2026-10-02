@@ -23,6 +23,9 @@ class ProviderTests(unittest.TestCase):
         class FakePlaywrightError(Exception):
             pass
 
+        class FakePlaywrightTimeoutError(FakePlaywrightError):
+            pass
+
         class FakePage:
             def __init__(self):
                 self.request = types.SimpleNamespace(resource_type="image")
@@ -74,6 +77,7 @@ class ProviderTests(unittest.TestCase):
 
         fake_sync_api = types.ModuleType("playwright.sync_api")
         fake_sync_api.Error = FakePlaywrightError
+        fake_sync_api.TimeoutError = FakePlaywrightTimeoutError
         fake_sync_api.sync_playwright = lambda: FakePlaywrightContext()
         provider = DmitProvider({"name": "dmit", "type": "dmit"})
         with patch.dict(sys.modules, {"playwright.sync_api": fake_sync_api}):
@@ -130,6 +134,38 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(available.specs["traffic"], "500GB")
         self.assertEqual(available.specs["bandwidth"], "1Gbps; Unmetered 4Mbps")
         self.assertFalse(soldout.available)
+
+    def test_dmit_retries_one_selector_timeout(self):
+        html = (FIXTURES / "dmit_catalog.html").read_text(encoding="utf-8")
+        provider = DmitProvider(
+            {
+                "name": "dmit",
+                "type": "dmit",
+                "selector_retry_attempts": 1,
+                "selector_retry_backoff_seconds": 0,
+            }
+        )
+        with patch.object(
+            provider,
+            "get_text",
+            side_effect=[FetchError("browser selector timeout for catalog"), html],
+        ) as fetch:
+            products = provider.fetch_products()
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(len(products), 2)
+
+    def test_dmit_does_not_retry_non_selector_failure(self):
+        provider = DmitProvider(
+            {"name": "dmit", "type": "dmit", "selector_retry_attempts": 1}
+        )
+        with patch.object(
+            provider,
+            "get_text",
+            side_effect=FetchError("browser page.goto timeout for catalog"),
+        ) as fetch:
+            with self.assertRaises(FetchError):
+                provider.fetch_products()
+        self.assertEqual(fetch.call_count, 1)
 
     def test_dmit_pid_probe_signals(self):
         provider = DmitProvider({"name": "dmit", "type": "dmit", "fetch_mode": "http"})
