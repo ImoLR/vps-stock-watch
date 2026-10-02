@@ -17,6 +17,7 @@ from watcher.app import WatcherApp
 from watcher.isolated_scan import (
     SCAN_MARKER_ENV,
     _marked_processes,
+    _prepare_delegated_parent,
     fetch_products_isolated,
     terminate_marked_processes,
 )
@@ -237,6 +238,46 @@ class ProviderIsolationTests(unittest.TestCase):
         self.assertLess(elapsed, 1.5)
         self.assertIn("wall-clock timeout", str(caught.exception))
         self.assertEqual(_marked_processes(marker), set())
+
+    def test_existing_watcher_leaf_uses_parent(self):
+        current = Path("/sys/fs/cgroup/example.service/watcher")
+        self.assertEqual(
+            _prepare_delegated_parent(current),
+            Path("/sys/fs/cgroup/example.service"),
+        )
+
+    def test_old_systemd_root_processes_move_to_watcher_leaf(self):
+        parent = self.root / "example.service"
+        parent.mkdir()
+        root_procs = parent / "cgroup.procs"
+        root_procs.write_text("11\n12\n", encoding="ascii")
+        original_read = Path.read_text
+        reads = {"root": 0}
+        writes = []
+
+        def fake_read(path, *args, **kwargs):
+            if path == root_procs:
+                reads["root"] += 1
+                return "11\n12\n" if reads["root"] == 1 else ""
+            return original_read(path, *args, **kwargs)
+
+        def fake_write(path, value, *args, **kwargs):
+            writes.append((path, value))
+            return len(value)
+
+        with patch.object(Path, "read_text", fake_read), patch.object(
+            Path, "write_text", fake_write
+        ):
+            result = _prepare_delegated_parent(parent)
+
+        self.assertEqual(result, parent)
+        self.assertEqual(
+            writes,
+            [
+                (parent / "watcher" / "cgroup.procs", "11"),
+                (parent / "watcher" / "cgroup.procs", "12"),
+            ],
+        )
 
     def test_marker_cleanup_removes_reparentable_descendants(self):
         marker = "test-" + uuid.uuid4().hex

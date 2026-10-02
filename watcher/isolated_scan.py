@@ -157,9 +157,10 @@ def _create_scan_cgroup(
             if line.startswith("0::")
         )
         current = Path("/sys/fs/cgroup") / relative.lstrip("/")
-        # systemd's DelegateSubgroup keeps the watcher itself in a leaf named
-        # "watcher". Provider scan groups are siblings under the delegated unit.
-        parent = current.parent if current.name == "watcher" else current
+        # New systemd releases can place the service in DelegateSubgroup=watcher.
+        # Older supported releases ignore that directive, so move all service
+        # processes into the same leaf before enabling child memory controllers.
+        parent = _prepare_delegated_parent(current)
         subtree_control = parent / "cgroup.subtree_control"
         enabled = subtree_control.read_text(encoding="ascii").split()
         if "memory" not in enabled:
@@ -193,6 +194,28 @@ def _create_scan_cgroup(
         except (OSError, UnboundLocalError):
             pass
         return None
+
+
+def _prepare_delegated_parent(current: Path) -> Path:
+    if current.name == "watcher":
+        return current.parent
+    leaf = current / "watcher"
+    leaf.mkdir(mode=0o700, exist_ok=True)
+    root_procs = current / "cgroup.procs"
+    leaf_procs = leaf / "cgroup.procs"
+    for _attempt in range(4):
+        pids = [
+            value
+            for value in root_procs.read_text(encoding="ascii").split()
+            if value
+        ]
+        if not pids:
+            return current
+        for pid in pids:
+            leaf_procs.write_text(pid, encoding="ascii")
+    if root_procs.read_text(encoding="ascii").split():
+        raise OSError("delegated service cgroup still contains root processes")
+    return current
 
 
 def _remove_scan_cgroup(cgroup: Optional[Path]) -> None:
