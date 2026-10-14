@@ -12,6 +12,7 @@ from watcher.nexkr_autobuy import (
     buyable_zones,
     candidate_zones,
     order_body,
+    pick_codes,
     stock_status,
 )
 
@@ -102,6 +103,10 @@ class OrderBodyTests(unittest.TestCase):
             },
         )
 
+    def test_codes_are_sent(self):
+        body = order_body(PRODUCT, None, None, ["SMSVERIFYFEE", "WELCOME@NEXKR"])
+        self.assertEqual(body["codes"], ["SMSVERIFYFEE", "WELCOME@NEXKR"])
+
     def test_os_defaults_to_first_image(self):
         product = dict(PRODUCT, images=["debian-12", "ubuntu-24"])
         self.assertEqual(order_body(product, None, None)["os"], "debian-12")
@@ -109,14 +114,55 @@ class OrderBodyTests(unittest.TestCase):
         self.assertNotIn("zone", order_body(product, None, None))
 
 
+def fake_quote(prices, together_ok=True):
+    """Quote stub: ``prices`` maps each valid code to its discount in cents."""
+    def quote(codes):
+        if any(code not in prices for code in codes) or (len(codes) > 1 and not together_ok):
+            raise ApiError(400, "coupon_rejected", "bad code")
+        total = 430 - sum(prices[code] for code in codes)
+        return {"gross_cny": "28.00", "total_cny": "%.2f" % (total / 15.35), "total_cents": total}
+    return quote
+
+
+class PickCodesTests(unittest.TestCase):
+    def test_codes_stack(self):
+        codes, quote = pick_codes(fake_quote({"A": 200, "B": 43}), ["A", "B"])
+        self.assertEqual(codes, ["A", "B"])
+        self.assertEqual(quote["total_cents"], 187)
+
+    def test_rejected_code_is_dropped(self):
+        codes, _ = pick_codes(fake_quote({"B": 43}), ["A", "B"])
+        self.assertEqual(codes, ["B"])
+
+    def test_cheapest_single_when_codes_do_not_stack(self):
+        codes, quote = pick_codes(fake_quote({"A": 43, "B": 200}, together_ok=False), ["A", "B"])
+        self.assertEqual(codes, ["B"])
+        self.assertEqual(quote["total_cents"], 230)
+
+    def test_none_accepted(self):
+        self.assertEqual(pick_codes(fake_quote({}), ["A", "B"]), ([], None))
+
+    def test_other_errors_propagate(self):
+        def down(codes):
+            raise ApiError(0, "unreachable", "ConnectTimeout")
+        with self.assertRaises(ApiError):
+            pick_codes(down, ["A"])
+
+
 class FakeClient:
-    def __init__(self, order_errors=None, pay_error=None, catalogs=None):
+    def __init__(self, order_errors=None, pay_error=None, catalogs=None, quote=None):
         self.order_errors = list(order_errors or [])
         self.pay_error = pay_error
         self.catalogs = list(catalogs or [])
         self.orders = []
         self.paid = []
         self.on_empty_catalog = None
+        self.quote_codes = quote or fake_quote({})
+        self.quotes = []
+
+    def quote(self, slug, cycle_months, codes):
+        self.quotes.append(list(codes))
+        return self.quote_codes(codes)
 
     def set_cookie(self, cookie):
         pass
@@ -143,7 +189,7 @@ class FakeClient:
 
 
 class TryBuyTests(unittest.TestCase):
-    def make_buyer(self, tmp: str, client: FakeClient) -> AutoBuyer:
+    def make_buyer(self, tmp: str, client: FakeClient, codes=()) -> AutoBuyer:
         cookie = Path(tmp) / "cookie.txt"
         cookie.write_text("Cookie: sid=abc\n", encoding="utf-8")
         args = argparse.Namespace(
@@ -155,6 +201,7 @@ class TryBuyTests(unittest.TestCase):
             interval=3.0,
             zone=[],
             os=None,
+            codes=list(codes),
             dry_run=False,
             browser_headless=True,
             login_only=False,
@@ -231,6 +278,38 @@ class TryBuyTests(unittest.TestCase):
             self.assertEqual([o["zone"] for o in client.orders], ["seoul3"])
             self.assertEqual(len(client.catalogs), 1)
             self.assertTrue(buyer.switch.control.paused())
+
+    def test_rejected_coupon_retries_same_zone_without_codes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(order_errors=[ApiError(400, "coupon_rejected", "used")])
+            buyer = self.make_buyer(tmp, client, codes=["smsverifyfee"])
+            self.assertTrue(buyer.try_buy(GROUP, PRODUCT))
+            self.assertEqual(
+                [(o["zone"], o["codes"]) for o in client.orders],
+                [("goyang2", ["SMSVERIFYFEE"]), ("goyang2", [])],
+            )
+            self.assertEqual(client.paid, ["N123"])
+
+    def test_run_checks_codes_while_sold_out_and_orders_with_them(self):
+        def catalog(**product):
+            return {"groups": [dict(GROUP, products=[dict(PRODUCT, **product)])]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(
+                catalogs=[catalog(zones=[5], zone_sold_out=[5]), catalog(zones=[4]), catalog()],
+                quote=fake_quote({"WELCOME@NEXKR": 43}),
+            )
+            buyer = self.make_buyer(tmp, client, codes=["SMSVERIFYFEE", "WELCOME@NEXKR"])
+            client.on_empty_catalog = lambda: setattr(buyer, "stopping", True)
+            buyer.switch.sleep = lambda _s: setattr(buyer, "stopping", True)
+            with patch("watcher.nexkr_autobuy.time.sleep"):
+                self.assertEqual(buyer.run(), 0)
+            # Quoted once while sold out, never on the in-stock poll.
+            self.assertEqual(
+                client.quotes,
+                [["SMSVERIFYFEE", "WELCOME@NEXKR"], ["SMSVERIFYFEE"], ["WELCOME@NEXKR"]],
+            )
+            self.assertEqual([o["codes"] for o in client.orders], [["WELCOME@NEXKR"]])
 
     def test_unauthorized_stops_zone_attempts(self):
         with tempfile.TemporaryDirectory() as tmp:

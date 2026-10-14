@@ -22,7 +22,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -42,6 +42,7 @@ USER_AGENT = (
 SESSION_CHECK_SECONDS = 600
 RELOGIN_MIN_SECONDS = 900
 BALANCE_ERROR_HINTS = ("balance", "insufficient", "fund", "余额", "不足")
+COUPON_REJECTED = "coupon_rejected"
 MANUAL_LOGIN_NOTICE = (
     "\n🔒 程序已停止自动登录，你可以放心自己登录网站（充值/手动付款），不会被程序顶号。"
 )
@@ -190,6 +191,60 @@ class NexKrClient:
     def pay_balance(self, order_no: str) -> Dict[str, Any]:
         return self.request("POST", "/orders/%s/pay-balance" % order_no) or {}
 
+    def quote(self, slug: str, cycle_months: int, codes: List[str]) -> Dict[str, Any]:
+        return self.request(
+            "POST",
+            "/orders/quote",
+            {"product_slug": slug, "cycle_months": cycle_months, "codes": codes},
+        ) or {}
+
+
+def pick_codes(
+    quote: Callable[[List[str]], Dict[str, Any]], codes: Sequence[str]
+) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+    """The coupon codes worth sending with the order, and their quote.
+
+    One rejected code fails the whole order (400 coupon_rejected), so codes
+    that are used up or don't apply are dropped. Codes stack when the shop
+    allows it; otherwise the single cheapest one is kept. Errors other than
+    a rejected coupon propagate so the caller can keep its previous choice.
+    """
+    def attempt(chosen: List[str]) -> Optional[Dict[str, Any]]:
+        try:
+            return quote(chosen)
+        except ApiError as exc:
+            if exc.code != COUPON_REJECTED:
+                raise
+            return None
+
+    codes = list(codes)
+    if not codes:
+        return [], None
+    result = attempt(codes)
+    if result is not None:
+        return codes, result
+    singles = [(code, attempt([code])) for code in codes]
+    accepted = sorted(
+        ((q, code) for code, q in singles if q is not None),
+        key=lambda item: item[0].get("total_cents", 0),
+    )
+    working = [code for _, code in accepted]
+    if len(working) > 1:
+        result = attempt(working)
+        if result is not None:
+            return working, result
+    if accepted:
+        return working[:1], accepted[0][0]
+    return [], None
+
+
+def describe_codes(codes: Sequence[str], quote: Optional[Dict[str, Any]]) -> str:
+    if not codes:
+        return "无（全部不可用）"
+    if not quote:
+        return " + ".join(codes)
+    return "%s（¥%s → ¥%s）" % (" + ".join(codes), quote.get("gross_cny"), quote.get("total_cny"))
+
 
 def find_product(
     catalog: Dict[str, Any], slug: str
@@ -257,12 +312,15 @@ def stock_status(group: Dict[str, Any], product: Dict[str, Any]) -> str:
 
 
 def order_body(
-    product: Dict[str, Any], zone: Optional[Dict[str, Any]], os_image: Optional[str]
+    product: Dict[str, Any],
+    zone: Optional[Dict[str, Any]],
+    os_image: Optional[str],
+    codes: Sequence[str] = (),
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "product_slug": product["slug"],
         "cycle_months": product.get("cycle_months") or 1,
-        "codes": [],
+        "codes": list(codes),
     }
     if zone is not None:
         body["zone"] = zone["slug"]
@@ -291,13 +349,18 @@ class AutoBuyer:
         self.stopping = False
         self.last_order_failure_notice = float("-inf")
         self.last_login_attempt = float("-inf")
+        # Sent optimistically until the first quote check; see refresh_codes().
+        self.codes = [c.strip().upper() for c in getattr(args, "codes", None) or [] if c.strip()]
+        self.active_codes = list(self.codes)
+        self.codes_checked = float("-inf")
         self.heartbeat: Optional[Heartbeat] = None
         if not args.dry_run:
             self.heartbeat = Heartbeat(
                 getattr(args, "status_dir", None) or STATUS_DIR,
                 "nexkr",
                 "NexKr 国庆活动",
-                "商品 %s，余额付款" % args.slug,
+                "商品 %s，余额付款%s"
+                % (args.slug, "，优惠码 " + " + ".join(self.codes) if self.codes else ""),
                 args.interval,
             )
 
@@ -434,6 +497,26 @@ class AutoBuyer:
         self.session_ok = True
         return True
 
+    def refresh_codes(self, product: Dict[str, Any]) -> None:
+        """Re-check the coupon codes with a quote, so the order only carries ones that work."""
+        first = self.codes_checked == float("-inf")
+        self.codes_checked = time.monotonic()
+        cycle = product.get("cycle_months") or 1
+        try:
+            codes, quote = pick_codes(
+                lambda chosen: self.client.quote(product["slug"], cycle, chosen), self.codes
+            )
+        except ApiError as exc:
+            LOG.warning("coupon check failed, keeping %s: %s", self.active_codes, exc)
+            return
+        LOG.info("coupon codes: %s", describe_codes(codes, quote))
+        if first or codes != self.active_codes:
+            self.notify(
+                "🎟 <b>NexKr 优惠码</b>\n下单时使用：%s"
+                % html.escape(describe_codes(codes, quote))
+            )
+        self.active_codes = codes
+
     def write_marker(self, data: Dict[str, Any]) -> None:
         self.marker_path.parent.mkdir(parents=True, exist_ok=True)
         data["at"] = datetime.now(timezone.utc).isoformat()
@@ -448,8 +531,9 @@ class AutoBuyer:
             return False
         attempts: List[Optional[Dict[str, Any]]] = list(zones) or [None]
         errors = []
-        for zone in attempts:
-            body = order_body(product, zone, self.args.os)
+        while attempts:
+            zone = attempts.pop(0)
+            body = order_body(product, zone, self.args.os, self.active_codes)
             LOG.info("creating order %s", body)
             if self.args.dry_run:
                 self.notify("🧪 dry-run：会提交订单 <code>%s</code>" % html.escape(json.dumps(body)))
@@ -459,6 +543,12 @@ class AutoBuyer:
             except ApiError as exc:
                 LOG.warning("order failed in zone %s: %s", body.get("zone"), exc)
                 errors.append("%s: %s" % (body.get("zone") or "-", exc))
+                if exc.code == COUPON_REJECTED and body["codes"]:
+                    # The server matters more than the discount: retry this
+                    # zone right away without codes.
+                    self.active_codes = []
+                    attempts.insert(0, zone)
+                    continue
                 if exc.status in (401, 403):
                     self.session_ok = False
                     break
@@ -488,10 +578,11 @@ class AutoBuyer:
             self.write_marker({"order": paid or order, "request": body, "paid": True})
             self.mark_bought("已抢到并付款，订单 %s" % order_no)
             self.notify(
-                "✅ <b>NexKr 抢购成功并已付款</b>\n订单：%s\n区域：%s\n状态：%s\n%s"
+                "✅ <b>NexKr 抢购成功并已付款</b>\n订单：%s\n区域：%s\n优惠码：%s\n状态：%s\n%s"
                 % (
                     html.escape(order_no),
                     html.escape(str(body.get("zone") or "-")),
+                    html.escape(" + ".join(body["codes"]) or "无"),
                     html.escape(str(paid.get("status") or "paid")),
                     html.escape(link),
                 )
@@ -567,6 +658,14 @@ class AutoBuyer:
                 LOG.info("stock status: %s", status)
                 last_status = status
             buyable = buyable_zones(group, product, self.args.zone) is not None
+            if (
+                self.codes
+                and not buyable
+                and self.session_ok
+                and time.monotonic() - self.codes_checked >= SESSION_CHECK_SECONDS
+            ):
+                # Only while out of stock, so the check never delays an order.
+                self.refresh_codes(product)
             self.beat(
                 state="ordering" if buyable else "watching",
                 detail="%s%s"
@@ -629,6 +728,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="preferred zone slug, repeatable (goyang2, seoul3, seoul4); others are fallbacks",
     )
     parser.add_argument("--os", default=None, help="preferred OS image if the product offers images")
+    parser.add_argument(
+        "--code",
+        dest="codes",
+        action="append",
+        default=[],
+        help="coupon code, repeatable; stacked when the shop allows, dropped when rejected",
+    )
     parser.add_argument("--status-dir", default=STATUS_DIR, help="heartbeat dir read by the bot")
     parser.add_argument("--dry-run", action="store_true", help="never create an order")
     parser.add_argument(
