@@ -9,6 +9,7 @@ from pathlib import Path
 from tests.test_intervals import FakeTelegram, callback, message
 from watcher.app import WatcherApp
 from watcher.autobuy_status import (
+    Control,
     Heartbeat,
     effective_state,
     format_autobuy_status,
@@ -74,7 +75,7 @@ class FormatTests(unittest.TestCase):
         self.assertIn("状态：目标节点还没上架", text)
         self.assertIn("✅ 已抢到", text)
         self.assertIn("结果：订单 X，已付款", text)
-        self.assertIn("⏹ 已停止", text)
+        self.assertIn("⚠️ 进程未运行", text)
 
     def test_escapes_html_and_handles_empty(self):
         self.assertIn("没有抢购程序", format_autobuy_status([], NOW))
@@ -121,13 +122,66 @@ class TelegramAutobuyTests(unittest.TestCase):
         for text, markup in self.app.telegram.sent:
             self.assertIn("🟢 正在抢购", text)
             self.assertIn("目标：target-nnb", text)
-            callbacks = [b["callback_data"] for b in markup["inline_keyboard"][0]]
-            self.assertEqual(callbacks, [AUTOBUY_CALLBACK, STATUS_BACK_CALLBACK])
+            rows = [[b["callback_data"] for b in row] for row in markup["inline_keyboard"]]
+            self.assertEqual(
+                rows,
+                [
+                    ["autobuy:stop:nnb", "autobuy:interval:nnb"],
+                    [AUTOBUY_CALLBACK, STATUS_BACK_CALLBACK],
+                ],
+            )
 
     def test_back_returns_to_status(self):
         self.app.process_update(callback(STATUS_BACK_CALLBACK))
         _text, markup = self.app.telegram.sent[-1]
         self.assertEqual(markup, status_menu_markup())
+
+    def control(self):
+        return Control(str(self.status_dir), "nnb")
+
+    def write_status(self, **values):
+        data = status("nnb", "watching", updated_at=datetime.now(timezone.utc).isoformat())
+        data.update(values)
+        (self.status_dir / "nnb.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def test_stop_then_start(self):
+        self.app.process_update(callback("autobuy:stop:nnb"))
+        self.assertTrue(self.control().paused())
+        text, markup = self.app.telegram.sent[-1]
+        self.assertIn("停止指令已下达", text)
+        self.assertEqual(markup["inline_keyboard"][0][0]["callback_data"], "autobuy:start:nnb")
+        self.write_status(state="paused")
+        self.app.process_update(callback("autobuy:start:nnb"))
+        self.assertFalse(self.control().paused())
+
+    def test_start_after_purchase_asks_to_confirm(self):
+        self.write_status(state="paused", result="已扣余额开通，服务 #380")
+        self.control().set(True, "已抢到，自动停止")
+        self.app.process_update(callback("autobuy:start:nnb"))
+        self.assertTrue(self.control().paused())
+        text, markup = self.app.telegram.sent[-1]
+        self.assertIn("再下单一台并扣款", text)
+        self.assertEqual(markup["inline_keyboard"][0][0]["callback_data"], "autobuy:start!:nnb")
+        self.app.process_update(callback("autobuy:start!:nnb"))
+        self.assertFalse(self.control().paused())
+
+    def test_interval_is_typed_and_validated(self):
+        self.app.process_update(callback("autobuy:interval:nnb"))
+        self.assertIn("当前：每 5 秒", self.app.telegram.sent[-1][0])
+        self.app.process_update(message("1"))
+        self.assertIn("2–3600", self.app.telegram.sent[-1][0])
+        self.app.process_update(message("8"))
+        self.assertEqual(self.control().interval(5), 8)
+        self.assertIn("轮询：每 8 秒", self.app.telegram.sent[-1][0])
+        # Once set, plain numbers no longer change anything.
+        self.app.process_update(message("9"))
+        self.assertEqual(self.control().interval(5), 8)
+
+    def test_dead_buyer_cannot_be_controlled(self):
+        self.write_status(updated_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
+        self.app.process_update(callback("autobuy:stop:nnb"))
+        self.assertFalse(self.control().exists())
+        self.assertIn("没有在运行", self.app.telegram.sent[0][0])
 
     def test_unauthorized_user_sees_nothing(self):
         self.app.process_update(message("/autobuy", user_id="999"))

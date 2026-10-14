@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -251,11 +252,81 @@ class AutoBuyerTests(unittest.TestCase):
         buyer.client.login.assert_called_once_with("u", "p")
         self.assertEqual(Path(buyer.token_path).read_text(encoding="utf-8").strip(), "fresh")
 
-    def test_existing_marker_refuses_to_run(self):
+    def run_loops(self, buyer, loops=1):
+        """Run the buyer until it has slept ``loops`` times."""
+        calls = []
+
+        def sleep(_seconds):
+            calls.append(_seconds)
+            if len(calls) >= loops:
+                buyer.stopping = True
+
+        buyer.switch.sleep = sleep
+        with patch("watcher.nnb_autobuy.time.sleep", sleep):
+            self.assertEqual(buyer.run(), 0)
+
+    def status(self, buyer):
+        return json.loads(buyer.heartbeat.path.read_text(encoding="utf-8"))
+
+    def test_past_purchase_starts_paused_without_requests(self):
         buyer = self.make(0)
-        buyer.marker_path.write_text("{}", encoding="utf-8")
-        self.assertEqual(buyer.run(), 0)
+        buyer.marker_path.write_text('{"paid": true, "service": {"id": 380}}', encoding="utf-8")
+        self.run_loops(buyer)
         buyer.client.nodes.assert_not_called()
+        buyer.client.wallet.assert_not_called()
+        self.assertTrue(buyer.switch.control.paused())
+        status = self.status(buyer)
+        self.assertEqual(status["detail"], "已抢到，自动停止")
+        self.assertIn("#380", status["result"])
+
+    def test_purchase_pauses_instead_of_exiting(self):
+        buyer = self.make(300000)
+        buyer.client.create_service.return_value = {"id": 55}
+        self.assertTrue(buyer.try_buy(self.hk, *self.offer(buyer)))
+        self.assertTrue(buyer.switch.control.paused())
+        status = self.status(buyer)
+        self.assertEqual(status["state"], "paused")
+        self.assertIn("#55", status["result"])
+
+    def test_pause_from_telegram_stops_polling(self):
+        buyer = self.make(0)
+        buyer.switch.control.set(True, "手动暂停")
+        self.run_loops(buyer, loops=3)
+        buyer.client.nodes.assert_not_called()
+        self.assertEqual(self.status(buyer)["detail"], "手动暂停")
+
+    def test_interval_from_telegram_is_used_next_poll(self):
+        buyer = self.make(0)
+        buyer.switch.control.set_interval(8)
+        buyer.client.nodes.return_value = []
+        buyer.client.kyc.return_value = {}
+        buyer.client.ssh_keys.return_value = []
+        slept = []
+
+        def sleep(seconds):
+            slept.append(seconds)
+            buyer.stopping = True
+
+        with patch("watcher.nnb_autobuy.time.sleep", sleep):
+            buyer.run()
+        self.assertEqual(slept, [8])
+        self.assertEqual(self.status(buyer)["interval"], 8)
+
+    def test_resume_after_purchase_archives_marker_and_polls_again(self):
+        buyer = self.make(0)
+        buyer.marker_path.write_text('{"paid": true, "service": {"id": 380}}', encoding="utf-8")
+        buyer.failures = 4
+        os.utime(buyer.marker_path, (1, 1))  # bought long before the resume below
+        buyer.switch.control.set(False)
+        buyer.client.nodes.return_value = []
+        buyer.client.kyc.return_value = {}
+        buyer.client.ssh_keys.return_value = []
+        self.run_loops(buyer)
+        self.assertFalse(buyer.marker_path.exists())
+        archived = list(Path(self.tmp.name).glob("done-*.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(buyer.failures, 0)
+        buyer.client.nodes.assert_called_once()
 
 
 if __name__ == "__main__":

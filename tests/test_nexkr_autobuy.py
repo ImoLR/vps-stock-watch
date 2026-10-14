@@ -224,10 +224,13 @@ class TryBuyTests(unittest.TestCase):
             )
             buyer = self.make_buyer(tmp, client)
             client.on_empty_catalog = lambda: setattr(buyer, "stopping", True)
+            # After the purchase the buyer pauses; stop it on its first paused wait.
+            buyer.switch.sleep = lambda _s: setattr(buyer, "stopping", True)
             with patch("watcher.nexkr_autobuy.time.sleep"):
                 self.assertEqual(buyer.run(), 0)
             self.assertEqual([o["zone"] for o in client.orders], ["seoul3"])
             self.assertEqual(len(client.catalogs), 1)
+            self.assertTrue(buyer.switch.control.paused())
 
     def test_unauthorized_stops_zone_attempts(self):
         with tempfile.TemporaryDirectory() as tmp:

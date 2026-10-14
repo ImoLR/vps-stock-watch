@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
-from .autobuy_status import DEFAULT_DIR as STATUS_DIR, Heartbeat
+from .autobuy_status import DEFAULT_DIR as STATUS_DIR, Control, Heartbeat, Switch
 from .config import telegram_credentials
 from .providers.nnb import (
     API_BASE,
@@ -321,9 +321,25 @@ class AutoBuyer:
                 args.interval,
             )
 
+        # Pause/resume from Telegram; not used by --dry-run.
+        self.default_interval = args.interval
+        self.switch: Optional[Switch] = None
+        if self.heartbeat is not None:
+            self.switch = Switch(Control(args.status_dir, "nnb"), self.marker_path, self.beat)
+
     def beat(self, **values: Any) -> None:
         if self.heartbeat is not None:
             self.heartbeat.update(**values)
+
+    def mark_bought(self) -> None:
+        if self.switch is not None:
+            self.switch.bought(marker_result(self.marker_path))
+
+    def reset_attempts(self) -> None:
+        self.failures = 0
+        self.next_attempt = 0.0
+        self.last_failure_notice = float("-inf")
+        self.noticed = set()
 
     def notify(self, text: str) -> None:
         LOG.info("notify: %s", text.replace("\n", " | "))
@@ -518,7 +534,7 @@ class AutoBuyer:
                 LOG.warning("balance order rejected (%s); falling back to checkout", exc)
             else:
                 self.write_marker({"service": service, "request": body, "paid": True})
-                self.beat(state="done", result=marker_result(self.marker_path))
+                self.mark_bought()
                 self.notify(
                     "✅ <b>NewNB 抢购成功，已从余额扣款开通</b>\n节点：%s\n价格：¥%s\n%s/dashboard/services/%s"
                     % (html.escape(label), yuan(price), SITE, html.escape(str(service.get("id"))))
@@ -532,7 +548,7 @@ class AutoBuyer:
             return False
         url = str(result.get("checkout_url") or "")
         self.write_marker({"checkout": result, "request": checkout_body, "paid": False})
-        self.beat(state="done", result=marker_result(self.marker_path))
+        self.mark_bought()
         self.notify(
             "🧾 <b>NewNB 有货！已创建支付订单，请立刻付款</b>\n节点：%s\n价格：¥%s（余额 ¥%s）\n"
             "%s\n⚠️ 付款后才开通，不占库存，售完会失败，越快越好。"
@@ -561,16 +577,30 @@ class AutoBuyer:
             )
 
     def run(self) -> int:
-        if self.marker_path.exists():
-            # Exit cleanly so a Restart=on-failure unit does not loop.
-            LOG.error("marker %s exists; already bought once, refusing to run", self.marker_path)
-            self.beat(state="done", result=marker_result(self.marker_path))
-            return 0
-        self.beat(state="starting")
-        if not self.announce() and not self.args.dry_run:
-            LOG.warning("account check failed; polling anyway and retrying the login on demand")
+        if self.switch is None:
+            if self.marker_path.exists():
+                LOG.error("marker %s exists; already bought once", self.marker_path)
+                return 0
+        else:
+            # A past purchase keeps the buyer paused until resumed from Telegram.
+            self.switch.startup(marker_result(self.marker_path))
         last_status: Dict[Any, str] = {}
+        announced = False
         while not self.stopping:
+            if self.switch is not None:
+                if self.switch.hold():
+                    continue
+                self.args.interval = self.switch.interval(self.default_interval)
+                if self.switch.rearm():
+                    LOG.info("resumed after a purchase; the next match will be bought again")
+                    self.reset_attempts()
+                    announced = False
+            if not announced:
+                # Only once not paused, so a paused buyer makes no requests at all.
+                self.beat(state="starting")
+                if not self.announce() and not self.args.dry_run:
+                    LOG.warning("account check failed; polling anyway, login retried on demand")
+                announced = True
             try:
                 nodes = self.client.nodes()
             except Exception as exc:  # ApiError or ParseError from a bad reply
@@ -597,7 +627,9 @@ class AutoBuyer:
                 LOG.info("TARGET ORDERABLE: %s", status)
                 self.beat(state="ordering", detail=status)
                 if self.try_buy(node, *offer):
-                    return 0
+                    if self.switch is None:
+                        return 0
+                    break  # now paused; the next loop holds
             time.sleep(self.args.interval)
         self.beat(state="stopped")
         return 0

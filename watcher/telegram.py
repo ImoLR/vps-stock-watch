@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 
+from .autobuy_status import LIVE_STATES, effective_state, sort_statuses
 from .models import Change, ChangeType, Product
 
 
@@ -145,6 +146,10 @@ STOCK_PROVIDER_PREFIX = "stock:provider:"
 ROUTE_STATUS_CALLBACK = "route:misaka"
 ROUTE_BACK_CALLBACK = "route:back"
 AUTOBUY_CALLBACK = "autobuy:menu"
+AUTOBUY_START_PREFIX = "autobuy:start:"
+AUTOBUY_START_CONFIRM_PREFIX = "autobuy:start!:"
+AUTOBUY_STOP_PREFIX = "autobuy:stop:"
+AUTOBUY_INTERVAL_PREFIX = "autobuy:interval:"
 STATUS_BACK_CALLBACK = "status:menu"
 STOCK_MESSAGE_LIMIT = 3900
 
@@ -168,15 +173,64 @@ def status_menu_markup(route_enabled: bool = False) -> Dict[str, Any]:
     return {"inline_keyboard": rows}
 
 
-def autobuy_markup() -> Dict[str, Any]:
+def autobuy_markup(statuses: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    """Start/stop and interval buttons for every buyer whose process is alive."""
+    rows = []
+    for status in sort_statuses(list(statuses)):
+        state = effective_state(status)
+        if state not in LIVE_STATES:
+            continue
+        name = str(status["name"])
+        title = str(status.get("title") or name)
+        control = status.get("control") or {}
+        stopped = bool(control["paused"]) if "paused" in control else state == "paused"
+        rows.append(
+            [
+                {
+                    "text": ("▶️ 启动 " if stopped else "⏹ 停止 ") + title,
+                    "callback_data": (AUTOBUY_START_PREFIX if stopped else AUTOBUY_STOP_PREFIX)
+                    + name,
+                },
+                {"text": "⏱ 间隔", "callback_data": AUTOBUY_INTERVAL_PREFIX + name},
+            ]
+        )
+    rows.append(
+        [
+            {"text": "🔄 刷新", "callback_data": AUTOBUY_CALLBACK},
+            {"text": "← 返回状态", "callback_data": STATUS_BACK_CALLBACK},
+        ]
+    )
+    return {"inline_keyboard": rows}
+
+
+def autobuy_confirm_markup(name: str) -> Dict[str, Any]:
     return {
         "inline_keyboard": [
             [
-                {"text": "🔄 刷新", "callback_data": AUTOBUY_CALLBACK},
-                {"text": "← 返回状态", "callback_data": STATUS_BACK_CALLBACK},
+                {"text": "✅ 确认启动", "callback_data": AUTOBUY_START_CONFIRM_PREFIX + name},
+                {"text": "取消", "callback_data": AUTOBUY_CALLBACK},
             ]
         ]
     }
+
+
+def format_autobuy_start_confirm(status: Dict[str, Any]) -> str:
+    return (
+        "⚠️ <b>%s</b> 上次已经抢到：\n%s\n\n"
+        "启动后一旦有货会<b>再下单一台并扣款</b>。确认启动吗？"
+        % (
+            html.escape(str(status.get("title") or status.get("name"))),
+            html.escape(str(status.get("result") or "-")),
+        )
+    )
+
+
+def format_autobuy_interval_prompt(status: Dict[str, Any], current: float, low: int, high: int) -> str:
+    return (
+        "⏱ <b>%s</b> 轮询间隔\n当前：每 %g 秒\n\n请直接发送新的秒数（%d–%d 的整数），"
+        "发送“取消”返回。"
+        % (html.escape(str(status.get("title") or status.get("name"))), current, low, high)
+    )
 
 
 def route_status_markup() -> Dict[str, Any]:

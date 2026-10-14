@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
-from .autobuy_status import DEFAULT_DIR as STATUS_DIR, Heartbeat
+from .autobuy_status import DEFAULT_DIR as STATUS_DIR, Control, Heartbeat, Switch
 from .config import telegram_credentials
 from .telegram import TelegramClient, TelegramError
 
@@ -301,9 +301,21 @@ class AutoBuyer:
                 args.interval,
             )
 
+        # Pause/resume from Telegram; not used by --dry-run.
+        self.default_interval = args.interval
+        self.switch: Optional[Switch] = None
+        if self.heartbeat is not None:
+            self.switch = Switch(
+                Control(self.heartbeat.path.parent, "nexkr"), self.marker_path, self.beat
+            )
+
     def beat(self, **values: Any) -> None:
         if self.heartbeat is not None:
             self.heartbeat.update(**values)
+
+    def mark_bought(self, result: str) -> None:
+        if self.switch is not None:
+            self.switch.bought(result)
 
     @property
     def can_login(self) -> bool:
@@ -455,12 +467,12 @@ class AutoBuyer:
             order_no = str(order.get("order_no") or "")
             link = "%s/app/order/%s" % (SITE, order_no)
             self.write_marker({"order": order, "request": body})
-            self.beat(state="done", result="已下单 %s，余额付款中" % order_no)
+            self.beat(result="已下单 %s，余额付款中" % order_no)
             try:
                 paid = self.client.pay_balance(order_no).get("order") or {}
             except ApiError as exc:
                 self.hand_over_login()
-                self.beat(state="done", result="已下单 %s，余额支付失败，需手动付款" % order_no)
+                self.mark_bought("已下单 %s，余额支付失败，需手动付款" % order_no)
                 self.notify(
                     "⚠️ <b>NexKr 已下单但余额支付失败</b>\n订单：%s\n区域：%s\n错误：%s\n"
                     "请尽快手动支付：%s%s"
@@ -474,7 +486,7 @@ class AutoBuyer:
                 )
                 return True
             self.write_marker({"order": paid or order, "request": body, "paid": True})
-            self.beat(state="done", result="已抢到并付款，订单 %s" % order_no)
+            self.mark_bought("已抢到并付款，订单 %s" % order_no)
             self.notify(
                 "✅ <b>NexKr 抢购成功并已付款</b>\n订单：%s\n区域：%s\n状态：%s\n%s"
                 % (
@@ -503,22 +515,37 @@ class AutoBuyer:
         return False
 
     def run(self) -> int:
-        if self.marker_path.exists():
-            # Exit cleanly so a Restart=on-failure unit does not loop.
-            LOG.error("marker %s exists; already bought once, refusing to run", self.marker_path)
-            self.beat(state="done", result=marker_result(self.marker_path))
-            return 0
-        self.beat(state="starting")
-        if not self.check_session(announce=True) and not self.args.dry_run:
-            if not self.can_login and not self.manual_login:
-                LOG.error("session cookie is not valid")
-                return 1
-            # Keep polling; relogin() retries on its own throttle.
-            LOG.warning("not signed in yet; will keep retrying the login")
+        if self.switch is None:
+            if self.marker_path.exists():
+                LOG.error("marker %s exists; already bought once", self.marker_path)
+                return 0
+        else:
+            # A past purchase keeps the buyer paused until resumed from Telegram.
+            self.switch.startup(marker_result(self.marker_path))
         last_session_check = time.monotonic()
         last_failure_notice = float("-inf")
         last_status = None
+        started = False
         while not self.stopping:
+            if self.switch is not None:
+                if self.switch.hold():
+                    continue
+                self.args.interval = self.switch.interval(self.default_interval)
+                if self.switch.rearm():
+                    LOG.info("resumed after a purchase; the next stock will be bought again")
+                    self.last_order_failure_notice = float("-inf")
+                    started = False
+            if not started:
+                # Only once not paused, so a paused buyer never touches the session.
+                self.beat(state="starting")
+                if not self.check_session(announce=True) and not self.args.dry_run:
+                    if not self.can_login and not self.manual_login:
+                        LOG.error("session cookie is not valid")
+                        return 1
+                    # Keep polling; relogin() retries on its own throttle.
+                    LOG.warning("not signed in yet; will keep retrying the login")
+                last_session_check = time.monotonic()
+                started = True
             if time.monotonic() - last_session_check >= SESSION_CHECK_SECONDS:
                 self.check_session(announce=False)
                 last_session_check = time.monotonic()
@@ -556,7 +583,7 @@ class AutoBuyer:
                 self.check_session(announce=False)
             if buyable and (self.session_ok or self.args.dry_run):
                 LOG.info("IN STOCK: %s", self.args.slug)
-                if self.try_buy(group, product):
+                if self.try_buy(group, product) and self.switch is None:
                     return 0
             elif buyable and time.monotonic() - last_failure_notice > 300:
                 last_failure_notice = time.monotonic()

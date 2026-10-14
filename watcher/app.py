@@ -11,7 +11,16 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from .autobuy_status import format_autobuy_status, load_statuses
+from .autobuy_status import (
+    LIVE_STATES,
+    MAX_INTERVAL as MAX_AUTOBUY_INTERVAL,
+    MIN_INTERVAL as MIN_AUTOBUY_INTERVAL,
+    Control,
+    configured_interval,
+    effective_state,
+    format_autobuy_status,
+    load_statuses,
+)
 from .config import load_config, telegram_credentials
 from .isolated_scan import fetch_products_isolated, terminate_active_scans
 from .models import Product
@@ -25,6 +34,10 @@ from .route_watch import (
 from .state import StateStore
 from .telegram import (
     AUTOBUY_CALLBACK,
+    AUTOBUY_INTERVAL_PREFIX,
+    AUTOBUY_START_CONFIRM_PREFIX,
+    AUTOBUY_START_PREFIX,
+    AUTOBUY_STOP_PREFIX,
     BOT_COMMANDS,
     INTERVAL_BACK_CALLBACK,
     INTERVAL_MENU_CALLBACK,
@@ -49,7 +62,10 @@ from .telegram import (
     stock_menu_markup,
     stock_provider_markup,
     status_menu_markup,
+    autobuy_confirm_markup,
     autobuy_markup,
+    format_autobuy_interval_prompt,
+    format_autobuy_start_confirm,
     route_status_markup,
 )
 
@@ -90,6 +106,9 @@ class WatcherApp:
         self._running = set()
         self._provider_threads: Dict[str, threading.Thread] = {}
         self._pending_interval_provider: Optional[str] = None
+        # Auto-buyer waiting for a typed poll interval (separate from providers:
+        # "nexkr" is both a provider and a buyer name).
+        self._pending_autobuy_interval: Optional[str] = None
         route_config = config.get("route_watch")
         self.route_config: Optional[Dict[str, Any]] = (
             route_config
@@ -369,6 +388,11 @@ class WatcherApp:
         user_id = str((message.get("from") or {}).get("id", ""))
         text = str(message.get("text", "")).strip()
         command = text.split("@", 1)[0].strip().lower()
+        if command.startswith("/"):
+            self._pending_autobuy_interval = None
+        elif self._authorized(chat_id, user_id) and self._pending_autobuy_interval:
+            self._autobuy_interval_input(text)
+            return
         if self._authorized(chat_id, user_id) and command == "/status":
             self._pending_interval_provider = None
             self.send_status_menu()
@@ -419,7 +443,12 @@ class WatcherApp:
         with self._telegram_lock:
             self.telegram.answer_callback(callback_id)
         data = str(callback.get("data", ""))
-        if data == INTERVAL_MENU_CALLBACK:
+        if not data.startswith(AUTOBUY_INTERVAL_PREFIX):
+            self._pending_autobuy_interval = None
+        if data.startswith("autobuy:") and data != AUTOBUY_CALLBACK:
+            self._pending_interval_provider = None
+            self._autobuy_callback(data)
+        elif data == INTERVAL_MENU_CALLBACK:
             self._pending_interval_provider = None
             self._send_interval_menu()
         elif data == INTERVAL_BACK_CALLBACK:
@@ -492,9 +521,69 @@ class WatcherApp:
             status_menu_markup(route_enabled=bool(self.route_config)),
         )
 
+    def _autobuy_dir(self) -> str:
+        return str(self.config.get("autobuy_status_dir") or "data/autobuy")
+
     def send_autobuy_status(self) -> None:
-        directory = str(self.config.get("autobuy_status_dir") or "data/autobuy")
-        self._send_telegram(format_autobuy_status(load_statuses(directory)), autobuy_markup())
+        statuses = load_statuses(self._autobuy_dir())
+        self._send_telegram(format_autobuy_status(statuses), autobuy_markup(statuses))
+
+    def _live_buyer(self, name: str) -> Optional[Dict[str, Any]]:
+        """The status of a running buyer, or None (unknown name or dead process)."""
+        for status in load_statuses(self._autobuy_dir()):
+            if status.get("name") == name and effective_state(status) in LIVE_STATES:
+                return status
+        return None
+
+    def _autobuy_callback(self, data: str) -> None:
+        match = re.fullmatch(r"autobuy:(start|start!|stop|interval):([a-z0-9_-]+)", data)
+        if not match:
+            return
+        action, name = match.groups()
+        status = self._live_buyer(name)
+        if status is None:
+            self._send_telegram("⚠️ 这个抢购程序的进程没有在运行，无法操作。")
+            self.send_autobuy_status()
+            return
+        control = Control(self._autobuy_dir(), name)
+        if action == "interval":
+            self._pending_autobuy_interval = name
+            self._send_telegram(
+                format_autobuy_interval_prompt(
+                    status, configured_interval(status), MIN_AUTOBUY_INTERVAL, MAX_AUTOBUY_INTERVAL
+                )
+            )
+            return
+        if action == "start" and status.get("result"):
+            # Starting again after a purchase buys another one; ask first.
+            self._send_telegram(format_autobuy_start_confirm(status), autobuy_confirm_markup(name))
+            return
+        if action == "stop":
+            control.set(True, "在 Telegram 手动停止")
+        else:
+            control.set(False)
+        LOG.info("auto-buyer %s: %s from Telegram", name, action)
+        self.send_autobuy_status()
+
+    def _autobuy_interval_input(self, text: str) -> None:
+        name = self._pending_autobuy_interval or ""
+        if text.casefold() == "取消".casefold():
+            self._pending_autobuy_interval = None
+            self.send_autobuy_status()
+            return
+        if not re.fullmatch(r"[0-9]+", text) or not (
+            MIN_AUTOBUY_INTERVAL <= int(text) <= MAX_AUTOBUY_INTERVAL
+        ):
+            self._send_telegram(
+                "请输入 %d–%d 的整数秒数，或发送“取消”。"
+                % (MIN_AUTOBUY_INTERVAL, MAX_AUTOBUY_INTERVAL)
+            )
+            return
+        Control(self._autobuy_dir(), name).set_interval(int(text))
+        self._pending_autobuy_interval = None
+        LOG.info("auto-buyer %s interval set to %ss from Telegram", name, text)
+        self._send_telegram("✅ 已设置为每 %s 秒，下一轮生效。" % text)
+        self.send_autobuy_status()
 
     def send_route_status(self, refresh_disk: bool = False) -> None:
         route_state = self._route_state(refresh_disk)

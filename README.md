@@ -372,8 +372,14 @@ Provider 完成当前抓取后才安排下一轮，不会堆积重入任务或�
 
 抢购程序（`watcher.nexkr_autobuy`、`watcher.nnb_autobuy`）是独立进程，各自每 30 秒以及
 状态变化时原子写入 `data/autobuy/<name>.json`（目标、轮询间隔、当前库存状态、结果）。
-主 Bot 只读这些文件：心跳超过 `max(30, 轮询间隔) × 3 + 30` 秒未更新显示为“已停止”，
-写了结果的显示为“已抢到”。目录可用 `autobuy_status_dir` 配置。
+主 Bot 读取这些文件：心跳超过 `max(30, 轮询间隔) × 3 + 30` 秒未更新显示为“进程未运行”。
+目录可用 `autobuy_status_dir` 配置。
+
+每个仍在运行的抢购程序都有“▶️ 启动 / ⏹ 停止”和“⏱ 间隔”按钮。Bot 只写
+`data/autobuy/<name>.control`（`paused`、`interval`），抢购程序每轮重新读取：停止后进程
+继续存活但不发任何请求（不登录、不拉目录）；间隔可输入 2–3600 秒，下一轮生效。抢到后
+程序不再退出，而是自动停止并记录结果；之后再点启动会先要求确认（会再买一台并扣款），
+确认后旧的 `*_done.json` 改名归档，重新开始抢购。
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=123456789:replace_me
