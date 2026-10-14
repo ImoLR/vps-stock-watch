@@ -13,53 +13,58 @@ from watcher.providers.vmsilo import FetchedDocument, VmsiloProvider
 from watcher.telegram import format_status, format_stock_menu, format_stock_provider
 
 
-def category_html(categories, products, current="alpha", count=None):
-    navigation = []
-    for slug, label in categories:
-        active = " active" if slug == current else ""
-        navigation.append(
-            '<a id="Secondary_Sidebar-Categories-%s" class="product__cart__sidepanel__item%s" '
-            'href="/store/%s">%s</a>' % (slug, active, slug, label)
-        )
+def category_html(categories, products, current="gid=1", layout=True):
+    tabs = "".join(
+        '<a href="/cart.php?%s"%s>%s</a>'
+        % (ref, ' aria-current="page"' if ref == current else "", label)
+        for ref, label in categories
+    )
+    slug = dict(categories).get(current, current).split()[0].casefold()
     cards = []
-    for item in products:
-        slug = item["slug"]
+    for index, item in enumerate(products, 1):
+        product_slug = item["slug"]
         stock_text = item.get("stock_text")
-        stock = '<span class="stock">%s</span>' % stock_text if stock_text else ""
-        disabled = " disabled" if stock_text == "Sold Out" else ""
+        stock = "<p>%s</p>" % stock_text if stock_text else ""
+        if stock_text == "Sold Out" and item.get("drop_link"):
+            button = '<span class="btn btn-default">Out of Stock</span>'
+        else:
+            button = '<a href="/store/%s/%s" class="btn btn-primary%s">%s</a>' % (
+                slug,
+                product_slug,
+                " disabled" if stock_text == "Sold Out" else "",
+                "Sold Out" if stock_text == "Sold Out" else "Configure",
+            )
         cards.append(
             """
-            <div class="pricing__plans__standard__item">
-              <div class="pricing-plans-special-header"><h5>%s</h5></div>
-              <p>%s</p>%s
-              <div class="pricing">¥ <span data-row-price-min="%s">%s</span> 按月</div>
-              <a class="btn-order-now%s" href="/store/%s/%s">%s</a>
-              <ul class="pricing__plans__special__body">
-                CPU Cores：1<br>Amount Of RAM：512M<br>Disk Space：5G<br>
-                IPV4：0<br>IPV6：1<br>Bandwidth：200G<br>Network Rate：50Mbps
-              </ul>
-            </div>
+            <article class="bv-plan" id="product%s">
+              <header><h3>%s</h3></header>
+              <div class="bv-plan-desc"><div><strong>Default configuration</strong><br />
+                CPU Cores：1<br />Amount Of RAM：512M<br />Disk Space：5G<br />
+                IPV4：0<br />IPV6：1<br />Bandwidth：200G<br />Network Rate：50Mbps<br />
+              </div><ul></ul></div>%s
+              <footer class="bv-plan-price"><div><small>Base configuration</small><br>
+                <span class="price">¥%s CNY</span><small>%s</small></div>%s</footer>
+            </article>
             """
             % (
-                item.get("name", "Plan %s" % slug),
-                item.get("category", current.title()),
+                item.get("pid", index),
+                item.get("name", "Plan %s" % product_slug),
                 stock,
                 item.get("price", "10.00"),
-                item.get("price", "10.00"),
-                disabled,
-                current,
-                slug,
-                "Sold Out" if stock_text == "Sold Out" else "立即订购",
+                item.get("cycle", "/ month"),
+                button,
             )
         )
-    expected = len(products) if count is None else count
+    head = '<div class="bv-products-head"><div><h2>%s</h2></div></div>' % (
+        dict(categories).get(current, current)
+    )
     return """
-    <html><body>
-      <div class="product__cart__sidepanel">%s</div>
-      <div class="standard__cart__slider__layout__options__header standard__cart__%dproducts">%s</div>
+    <html><body><div id="order-standard_cart">
+      <nav class="bv-group-tabs" aria-label="VPS categories">%s</nav>
       %s
-    </body></html>
-    """ % ("".join(navigation), expected, current, "".join(cards))
+      <div class="bv-plan-grid">%s</div>
+    </div></body></html>
+    """ % (tabs, head if layout else "", "".join(cards))
 
 
 def vmsilo_product(
@@ -106,7 +111,11 @@ class VmsiloProviderTests(unittest.TestCase):
                 "minimum_categories": 2,
             }
         )
-        self.categories = [("alpha", "Alpha Plans"), ("beta", "Beta Plans")]
+        self.categories = [("gid=1", "Alpha Plans"), ("gid=2", "Beta Plans")]
+        self.base = self.provider.BASE_URL
+
+    def document(self, requested, final, html):
+        return FetchedDocument(requested, self.base + final, html)
 
     def test_parses_stable_slug_numeric_and_boolean_stock_and_direct_url(self):
         html = category_html(
@@ -115,6 +124,7 @@ class VmsiloProviderTests(unittest.TestCase):
                 {"slug": "numeric-plan", "stock_text": "3 Available"},
                 {"slug": "boolean-plan"},
                 {"slug": "sold-plan", "stock_text": "Sold Out"},
+                {"slug": "once-plan", "price": "0.00", "cycle": "One-time"},
             ],
         )
         items = self.provider.parse_category(
@@ -133,14 +143,30 @@ class VmsiloProviderTests(unittest.TestCase):
         self.assertFalse(by_id["sold-plan"].available)
         self.assertEqual(by_id["numeric-plan"].price, "¥10.00")
         self.assertEqual(by_id["numeric-plan"].billing_cycle, "monthly")
+        self.assertEqual(by_id["once-plan"].price, "¥0.00")
+        self.assertEqual(by_id["once-plan"].billing_cycle, "onetime")
         self.assertEqual(
             by_id["numeric-plan"].url,
             "https://portal.vmsilo.com/store/alpha/numeric-plan",
         )
         self.assertEqual(by_id["numeric-plan"].specs["cpu"], "1")
+        self.assertEqual(by_id["numeric-plan"].specs["bandwidth"], "50Mbps")
 
-    def test_zero_product_category_requires_explicit_count_marker(self):
-        valid = category_html(self.categories, [], current="beta")
+    def test_sold_out_card_without_link_keeps_learned_slug(self):
+        url = "https://portal.vmsilo.com/store/alpha"
+        listed = category_html(self.categories, [{"slug": "plan-a", "pid": 7}])
+        self.provider.parse_category(listed, url, "alpha", "Alpha Plans")
+        sold = category_html(
+            self.categories,
+            [{"slug": "plan-a", "pid": 7, "stock_text": "Sold Out", "drop_link": True}],
+        )
+        [item] = self.provider.parse_category(sold, url, "alpha", "Alpha Plans")
+        self.assertEqual(item.product_id, "plan-a")
+        self.assertFalse(item.available)
+        self.assertEqual(item.url, url)
+
+    def test_empty_category_requires_recognized_layout(self):
+        valid = category_html(self.categories, [], current="gid=2")
         self.assertEqual(
             self.provider.parse_category(
                 valid,
@@ -159,80 +185,84 @@ class VmsiloProviderTests(unittest.TestCase):
             )
         with self.assertRaises(ParseError):
             self.provider.parse_category(
-                category_html(self.categories, [], current="beta", count=2),
+                category_html(self.categories, [], current="gid=2", layout=False),
                 "https://portal.vmsilo.com/store/beta",
                 "beta",
                 "Beta Plans",
             )
 
-    def test_full_discovery_deduplicates_and_marks_homepage_only_category_hidden(self):
+    def test_full_discovery_uses_group_tabs_and_marks_extra_category_hidden(self):
+        self.provider.config["extra_category_urls"] = ["/store/gamma"]
         alpha = category_html(
-            self.categories,
-            [{"slug": "plan-a", "name": "Shared Plan"}],
-            "alpha",
+            self.categories, [{"slug": "plan-a", "name": "Plan A"}], "gid=1"
         )
         beta = category_html(
-            self.categories,
-            [{"slug": "plan-a", "name": "Shared Plan"}],
-            "beta",
+            self.categories, [{"slug": "plan-b", "name": "Plan B"}], "gid=2"
         )
         gamma = category_html(
-            self.categories,
-            [{"slug": "hidden-plan", "name": "Hidden Plan"}],
-            "gamma",
-        )
-        base = self.provider.BASE_URL
+            self.categories, [{"slug": "hidden-plan", "name": "Hidden Plan"}], "none"
+        ).replace("/store/none/", "/store/gamma/")
         store = self.provider.STORE_URL
         documents = {
-            base: FetchedDocument(
-                base,
-                base,
-                '<html><a href="/store/alpha">Alpha</a><a href="/store/gamma">Gamma</a>'
-                '<a href="/store/legacy">Legacy</a></html>',
+            store: self.document(store, "store/alpha", alpha),
+            self.base + "cart.php?gid=2": self.document(
+                self.base + "cart.php?gid=2", "store/beta", beta
             ),
-            store: FetchedDocument(store, base + "store/alpha", alpha),
-            base + "store/beta": FetchedDocument(
-                base + "store/beta", base + "store/beta", beta
-            ),
-            base + "store/gamma": FetchedDocument(
-                base + "store/gamma", base + "store/gamma", gamma
-            ),
-            base + "store/legacy": FetchedDocument(
-                base + "store/legacy", base + "store/alpha", alpha
+            self.base + "store/gamma": self.document(
+                self.base + "store/gamma", "store/gamma", gamma
             ),
         }
         with patch.object(
             self.provider, "_fetch_document", side_effect=lambda url: documents[url]
         ):
             products = self.provider.fetch_products()
-        self.assertEqual({item.product_id for item in products}, {"plan-a", "hidden-plan"})
-        hidden = next(item for item in products if item.product_id == "hidden-plan")
-        self.assertTrue(hidden.metadata["discovery"]["hidden"])
-        normal = next(item for item in products if item.product_id == "plan-a")
-        self.assertFalse(normal.metadata["discovery"]["hidden"])
-        self.assertEqual(set(normal.metadata["categories"]), {"alpha", "beta"})
+        by_id = {item.product_id: item for item in products}
+        self.assertEqual(set(by_id), {"plan-a", "plan-b", "hidden-plan"})
+        self.assertTrue(by_id["hidden-plan"].metadata["discovery"]["hidden"])
+        self.assertFalse(by_id["plan-a"].metadata["discovery"]["hidden"])
+        self.assertEqual(by_id["plan-b"].category, "Beta Plans")
+        self.assertEqual(by_id["plan-b"].metadata["category_slug"], "beta")
         self.assertEqual(self.provider.last_scan_stats["categories"], 3)
-        self.assertEqual(self.provider.last_scan_stats["duplicate_products"], 1)
-        self.assertEqual(self.provider.last_scan_stats["aliases"], {"legacy": "alpha"})
+        self.assertEqual(self.provider.last_scan_stats["requests"], 0)
+        self.assertEqual(
+            self.provider.last_scan_stats["category_routes"],
+            {"gid=1": "alpha", "gid=2": "beta", "store/gamma": "gamma"},
+        )
+
+    def test_too_few_categories_aborts_catalog(self):
+        store = self.provider.STORE_URL
+        alpha = category_html([("gid=1", "Alpha Plans")], [{"slug": "plan-a"}])
+        with patch.object(
+            self.provider,
+            "_fetch_document",
+            return_value=self.document(store, "store/alpha", alpha),
+        ):
+            with self.assertRaises(ParseError):
+                self.provider.fetch_products()
 
     def test_incomplete_navigation_aborts_catalog(self):
-        alpha = category_html(self.categories, [{"slug": "plan-a"}], "alpha")
-        beta = category_html([("beta", "Beta Plans")], [], "beta")
+        alpha = category_html(self.categories, [{"slug": "plan-a"}], "gid=1")
+        beta = category_html([("gid=2", "Beta Plans")], [], "gid=2")
+        store = self.provider.STORE_URL
         documents = {
-            self.provider.BASE_URL: FetchedDocument(
-                self.provider.BASE_URL,
-                self.provider.BASE_URL,
-                '<html><a href="/store/alpha">Alpha</a></html>',
+            store: self.document(store, "store/alpha", alpha),
+            self.base + "cart.php?gid=2": self.document(
+                self.base + "cart.php?gid=2", "store/beta", beta
             ),
-            self.provider.STORE_URL: FetchedDocument(
-                self.provider.STORE_URL,
-                self.provider.BASE_URL + "store/alpha",
-                alpha,
-            ),
-            self.provider.BASE_URL + "store/beta": FetchedDocument(
-                self.provider.BASE_URL + "store/beta",
-                self.provider.BASE_URL + "store/beta",
-                beta,
+        }
+        with patch.object(
+            self.provider, "_fetch_document", side_effect=lambda url: documents[url]
+        ):
+            with self.assertRaises(ParseError):
+                self.provider.fetch_products()
+
+    def test_wrong_active_tab_aborts_catalog(self):
+        alpha = category_html(self.categories, [{"slug": "plan-a"}], "gid=1")
+        store = self.provider.STORE_URL
+        documents = {
+            store: self.document(store, "store/alpha", alpha),
+            self.base + "cart.php?gid=2": self.document(
+                self.base + "cart.php?gid=2", "store/alpha", alpha
             ),
         }
         with patch.object(

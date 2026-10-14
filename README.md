@@ -170,21 +170,27 @@ N 个商品变成 0 并产生正常下架变化。当前扫描只需 1 个普通
 
 ### VMSILO
 
-VMSILO 位于 `https://portal.vmsilo.com/`，已确认使用 WHMCS + ShufyTheme。没有发现公开
-catalog JSON/API；分类、商品、价格、付款周期、配置和下单链接均已包含在服务端 HTML，
-因此 Provider 使用普通 HTTP 自动发现首页及分类侧栏中的 `/store/<category>`，不启动
-Chromium，也不调用购物车 AJAX。
+VMSILO 位于 `https://portal.vmsilo.com/`，使用 WHMCS。2026-10-08 之后站点从 ShufyTheme
+换成自定义 `bestvm` 主题：分类侧栏和 `standard__cart__Nproducts` 计数标记都已消失，
+分类改为 `.bv-group-tabs` 中的 `/cart.php?gid=<N>`（会重定向到 `/store/<category>`），
+商品卡为 `.bv-plan-grid > article.bv-plan#product<PID>`。没有发现公开 catalog JSON/API；
+Provider 以普通 HTTP 读取 `/store` 的分类标签，再逐个打开其余分类，不启动 Chromium，
+也不调用购物车 AJAX。首页现在直接重定向到商店，不再单独抓取；隐藏分类可通过
+`extra_category_urls` 配置。
 
 商品卡没有公开 WHMCS 数字 PID，购物车中的 `i=0/1/...` 又是会话内索引，不能作为 ID；
 Provider 因此使用公开商品 URL 中稳定的 product slug，并以 `vmsilo:<slug>` 保存。购买链接
 保留网站给出的 `/store/<category>/<product-slug>`，不猜测 PID URL。若页面公开精确
 `N Available` 就保存整数，否则只依据可订购/售罄按钮保存布尔状态，绝不伪造库存 1。
+售罄卡片若不再给出下单链接，会沿用本进程已学到的 PID→slug 映射保持同一 ID。
 
 2026-09-27 的真实扫描发现 2 个侧栏分类：IEPL 有 6 个商品，socks5 以模板计数明确返回
 0 个商品；6 个商品当前全部可订购，均只提供布尔库存，没有具体库存数字。首页旧 `cn2`
 入口会重定向到 IEPL 并被去重；robots、sitemap 与搜索结果没有发现额外可购买的隐藏商品。
-完整扫描使用 4 个普通 HTTP GET，默认间隔为 120 秒。分类侧栏缺失、模板商品计数与实际
-卡片数不一致、请求失败或未知空布局都会拒绝整轮 snapshot，避免误报批量下架。
+2026-10-14 新主题下的真实扫描：IEPL（gid=2）6 个商品与旧 slug、价格、规格完全一致，
+socks5（gid=11）新增 3 个一次性 ¥0.00 商品，完整扫描只需 2 个 HTTP GET，默认间隔 120 秒。
+分类标签少于 `minimum_categories`、某分类页标签不完整或高亮的不是所请求分类、缺少
+`bv-products-head` 布局、请求失败都会拒绝整轮 snapshot，避免误报批量下架。
 
 ### Misaka
 
