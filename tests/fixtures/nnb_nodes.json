@@ -1,0 +1,735 @@
+{
+ "code": 200,
+ "msg": "OK",
+ "data": {
+  "items": [
+   {
+    "created_at": "2026-10-05T00:02:46.489656+08:00",
+    "description": "EPYC 7R13 高性能機型 适合建站",
+    "discounts": {
+     "12": 20,
+     "3": 10,
+     "6": 15
+    },
+    "extra_nics": [
+     {
+      "bandwidth_hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "bandwidth_monthly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "cmcc_nat": true,
+      "discounts": {
+       "12": 15,
+       "3": 5,
+       "6": 10
+      },
+      "hint": "根据中国大陆相关法律法规，移动入口需要KYC\nNoBrand 自研防火墙实时监测违规流量并阻断",
+      "hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "id": 1,
+      "label": "IX + 移动入口",
+      "max_bandwidth_mbps": 500,
+      "max_regions": 3,
+      "min_bandwidth_mbps": 1,
+      "monthly_price": {
+       "raw": 130000,
+       "yuan": "13.00"
+      },
+      "traffic": {
+       "extra_price": {
+        "raw": 130000,
+        "yuan": "13.00"
+       },
+       "max_gb": 10000,
+       "min_gb": 50,
+       "price": {
+        "raw": 130000,
+        "yuan": "13.00"
+       },
+       "step_gb": 50,
+       "tiers": [
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 100,
+         "up_to_gb": 150
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 150,
+         "up_to_gb": 250
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 200,
+         "up_to_gb": 500
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 300,
+         "up_to_gb": 1500
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 400,
+         "up_to_gb": 3000
+        }
+       ]
+      },
+      "traffic_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "whitelist": true
+     }
+    ],
+    "group": {
+     "description": "",
+     "id": 1,
+     "name": "日本",
+     "sort_order": 0
+    },
+    "hourly_available": false,
+    "id": 2,
+    "limits": {
+     "bandwidth_mbps": {
+      "max": 1000,
+      "min": 1
+     },
+     "cpu": {
+      "max": 16,
+      "min": 1
+     },
+     "disk_gb": {
+      "max": 100,
+      "min": 10
+     },
+     "memory_gb": {
+      "max": 16,
+      "min": 1
+     }
+    },
+    "monthly_available": true,
+    "monthly_prices": {
+     "bandwidth": {
+      "raw": 0,
+      "yuan": "0.00"
+     },
+     "base": {
+      "raw": 230000,
+      "yuan": "23.00"
+     },
+     "cpu": {
+      "raw": 100000,
+      "yuan": "10.00"
+     },
+     "disk_gb": {
+      "raw": 6000,
+      "yuan": "0.60"
+     },
+     "memory_gb": {
+      "raw": 120000,
+      "yuan": "12.00"
+     }
+    },
+    "name": "TY #2 Performance",
+    "orderable": true,
+    "prices": {
+     "bandwidth": {
+      "raw": 15,
+      "yuan": "0.0015"
+     },
+     "cpu": {
+      "raw": 250,
+      "yuan": "0.025"
+     },
+     "disk_gb": {
+      "raw": 4,
+      "yuan": "0.0004"
+     },
+     "memory_gb": {
+      "raw": 120,
+      "yuan": "0.012"
+     }
+    },
+    "primary_nics": [
+     {
+      "cmcc_nat": false,
+      "hint": "NET: SB + IIJ + Lumen + PCCW\n盡力優化，無大陸路線保障",
+      "hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "id": 1,
+      "label": "Skyline 网络",
+      "max_regions": 3,
+      "monthly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "traffic": {
+       "extra_price": {
+        "raw": 90000,
+        "yuan": "9.00"
+       },
+       "max_gb": 64000,
+       "min_gb": 1000,
+       "price": {
+        "raw": 90000,
+        "yuan": "9.00"
+       },
+       "step_gb": 1000,
+       "tiers": []
+      },
+      "traffic_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "whitelist": false
+     }
+    ],
+    "provisionable": true,
+    "pve_node": "jp2",
+    "region": "tokyo",
+    "sort_order": 0,
+    "status": "active",
+    "traffic_direction": "both",
+    "updated_at": "2026-10-10T23:30:40.141993+08:00"
+   },
+   {
+    "created_at": "2026-10-05T00:44:19.294866+08:00",
+    "description": "CM + IX，不再售卖单 IX 版本",
+    "discounts": {
+     "12": 20,
+     "3": 10,
+     "6": 15
+    },
+    "extra_nics": [],
+    "group": {
+     "description": "",
+     "id": 2,
+     "name": "上海",
+     "sort_order": 0
+    },
+    "hourly_available": false,
+    "id": 3,
+    "limits": {
+     "bandwidth_mbps": {
+      "max": 500,
+      "min": 1
+     },
+     "cpu": {
+      "max": 8,
+      "min": 1
+     },
+     "disk_gb": {
+      "max": 50,
+      "min": 15
+     },
+     "memory_gb": {
+      "max": 8,
+      "min": 0.5
+     }
+    },
+    "monthly_available": true,
+    "monthly_prices": {
+     "bandwidth": {
+      "raw": 0,
+      "yuan": "0.00"
+     },
+     "base": {
+      "raw": 199000,
+      "yuan": "19.90"
+     },
+     "cpu": {
+      "raw": 60000,
+      "yuan": "6.00"
+     },
+     "disk_gb": {
+      "raw": 4000,
+      "yuan": "0.40"
+     },
+     "memory_gb": {
+      "raw": 90000,
+      "yuan": "9.00"
+     }
+    },
+    "name": "SH #1",
+    "orderable": true,
+    "prices": {
+     "bandwidth": {
+      "raw": 0,
+      "yuan": "0.00"
+     },
+     "cpu": {
+      "raw": 83,
+      "yuan": "0.0083"
+     },
+     "disk_gb": {
+      "raw": 6,
+      "yuan": "0.0006"
+     },
+     "memory_gb": {
+      "raw": 140,
+      "yuan": "0.014"
+     }
+    },
+    "primary_nics": [
+     {
+      "cmcc_nat": true,
+      "hint": "NAT 入 + 出",
+      "hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "id": 1,
+      "label": "沪日专线-CM",
+      "max_regions": 3,
+      "monthly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "traffic": {
+       "extra_price": {
+        "raw": 130000,
+        "yuan": "13.00"
+       },
+       "max_gb": 10000,
+       "min_gb": 100,
+       "price": {
+        "raw": 130000,
+        "yuan": "13.00"
+       },
+       "step_gb": 100,
+       "tiers": [
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 100,
+         "up_to_gb": 299
+        },
+        {
+         "discount": 5,
+         "max_bandwidth_mbps": 150,
+         "up_to_gb": 499
+        },
+        {
+         "discount": 9,
+         "max_bandwidth_mbps": 200,
+         "up_to_gb": 999
+        },
+        {
+         "discount": 12,
+         "max_bandwidth_mbps": 300,
+         "up_to_gb": 2999
+        },
+        {
+         "discount": 15,
+         "max_bandwidth_mbps": 400,
+         "up_to_gb": 5999
+        },
+        {
+         "discount": 17,
+         "max_bandwidth_mbps": 500,
+         "up_to_gb": 10000
+        }
+       ]
+      },
+      "traffic_price": {
+       "raw": 1300,
+       "yuan": "0.13"
+      },
+      "whitelist": true
+     }
+    ],
+    "provisionable": true,
+    "pve_node": "pve1",
+    "region": "shanghai",
+    "sort_order": 0,
+    "status": "active",
+    "traffic_direction": "both",
+    "updated_at": "2026-10-12T23:47:10.990887+08:00"
+   },
+   {
+    "created_at": "2026-10-10T22:50:29.268092+08:00",
+    "description": "EPYC 7R13 普通性能機型",
+    "discounts": {
+     "12": 20,
+     "3": 10,
+     "6": 15
+    },
+    "extra_nics": [
+     {
+      "bandwidth_hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "bandwidth_monthly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "cmcc_nat": true,
+      "discounts": {
+       "12": 15,
+       "3": 5,
+       "6": 10
+      },
+      "hint": "根据中国大陆相关法律法规，移动入口需要KYC\nNoBrand 自研防火墙实时监测违规流量并阻断",
+      "hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "id": 1,
+      "label": "IX + 移动入口",
+      "max_bandwidth_mbps": 500,
+      "max_regions": 3,
+      "min_bandwidth_mbps": 1,
+      "monthly_price": {
+       "raw": 130000,
+       "yuan": "13.00"
+      },
+      "traffic": {
+       "extra_price": {
+        "raw": 130000,
+        "yuan": "13.00"
+       },
+       "max_gb": 10000,
+       "min_gb": 50,
+       "price": {
+        "raw": 130000,
+        "yuan": "13.00"
+       },
+       "step_gb": 50,
+       "tiers": [
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 100,
+         "up_to_gb": 150
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 150,
+         "up_to_gb": 250
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 200,
+         "up_to_gb": 500
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 300,
+         "up_to_gb": 1500
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 400,
+         "up_to_gb": 3000
+        }
+       ]
+      },
+      "traffic_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "whitelist": true
+     }
+    ],
+    "group": {
+     "description": "",
+     "id": 1,
+     "name": "日本",
+     "sort_order": 0
+    },
+    "hourly_available": false,
+    "id": 4,
+    "limits": {
+     "bandwidth_mbps": {
+      "max": 1000,
+      "min": 1
+     },
+     "cpu": {
+      "max": 16,
+      "min": 1
+     },
+     "disk_gb": {
+      "max": 80,
+      "min": 8
+     },
+     "memory_gb": {
+      "max": 16,
+      "min": 0.5
+     }
+    },
+    "monthly_available": true,
+    "monthly_prices": {
+     "bandwidth": {
+      "raw": 0,
+      "yuan": "0.00"
+     },
+     "base": {
+      "raw": 150000,
+      "yuan": "15.00"
+     },
+     "cpu": {
+      "raw": 60000,
+      "yuan": "6.00"
+     },
+     "disk_gb": {
+      "raw": 3300,
+      "yuan": "0.33"
+     },
+     "memory_gb": {
+      "raw": 90000,
+      "yuan": "9.00"
+     }
+    },
+    "name": "TY #2 STD",
+    "orderable": true,
+    "prices": {
+     "bandwidth": {
+      "raw": 15,
+      "yuan": "0.0015"
+     },
+     "cpu": {
+      "raw": 250,
+      "yuan": "0.025"
+     },
+     "disk_gb": {
+      "raw": 4,
+      "yuan": "0.0004"
+     },
+     "memory_gb": {
+      "raw": 120,
+      "yuan": "0.012"
+     }
+    },
+    "primary_nics": [
+     {
+      "cmcc_nat": false,
+      "hint": "NET: SB + IIJ + Lumen + PCCW\n盡力優化，無大陸路線保障",
+      "hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "id": 1,
+      "label": "Skyline 网络",
+      "max_regions": 3,
+      "monthly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "traffic": {
+       "extra_price": {
+        "raw": 90000,
+        "yuan": "9.00"
+       },
+       "max_gb": 64000,
+       "min_gb": 1000,
+       "price": {
+        "raw": 90000,
+        "yuan": "9.00"
+       },
+       "step_gb": 1000,
+       "tiers": []
+      },
+      "traffic_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "whitelist": false
+     }
+    ],
+    "provisionable": true,
+    "pve_node": "jp2",
+    "region": "tokyo",
+    "sort_order": 0,
+    "status": "active",
+    "traffic_direction": "both",
+    "updated_at": "2026-10-11T16:57:41.209598+08:00"
+   },
+   {
+    "created_at": "2026-10-05T00:44:19.294866+08:00",
+    "description": "沪港专线，晚上少量发售",
+    "discounts": {
+     "12": 20,
+     "3": 10,
+     "6": 15
+    },
+    "extra_nics": [],
+    "group": {
+     "description": "",
+     "id": 3,
+     "name": "沪港",
+     "sort_order": 0
+    },
+    "hourly_available": false,
+    "id": 7,
+    "limits": {
+     "bandwidth_mbps": {
+      "max": 500,
+      "min": 1
+     },
+     "cpu": {
+      "max": 8,
+      "min": 1
+     },
+     "disk_gb": {
+      "max": 50,
+      "min": 15
+     },
+     "memory_gb": {
+      "max": 4,
+      "min": 0.75
+     }
+    },
+    "monthly_available": true,
+    "monthly_prices": {
+     "bandwidth": {
+      "raw": 0,
+      "yuan": "0.00"
+     },
+     "base": {
+      "raw": 150000,
+      "yuan": "15.00"
+     },
+     "cpu": {
+      "raw": 60000,
+      "yuan": "6.00"
+     },
+     "disk_gb": {
+      "raw": 4000,
+      "yuan": "0.40"
+     },
+     "memory_gb": {
+      "raw": 90000,
+      "yuan": "9.00"
+     }
+    },
+    "name": "SH-HK #1",
+    "orderable": false,
+    "prices": {
+     "bandwidth": {
+      "raw": 0,
+      "yuan": "0.00"
+     },
+     "cpu": {
+      "raw": 83,
+      "yuan": "0.0083"
+     },
+     "disk_gb": {
+      "raw": 6,
+      "yuan": "0.0006"
+     },
+     "memory_gb": {
+      "raw": 140,
+      "yuan": "0.014"
+     }
+    },
+    "primary_nics": [
+     {
+      "cmcc_nat": false,
+      "hint": "",
+      "hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "id": 1,
+      "label": "沪港专线-IX",
+      "max_regions": 3,
+      "monthly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "traffic": {
+       "extra_price": {
+        "raw": 50000,
+        "yuan": "5.00"
+       },
+       "max_gb": 3000,
+       "min_gb": 300,
+       "price": {
+        "raw": 50000,
+        "yuan": "5.00"
+       },
+       "step_gb": 100,
+       "tiers": [
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 200,
+         "up_to_gb": 399
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 300,
+         "up_to_gb": 3000
+        }
+       ]
+      },
+      "traffic_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "whitelist": false
+     },
+     {
+      "cmcc_nat": true,
+      "hint": "",
+      "hourly_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "id": 2,
+      "label": "沪港专线-CM",
+      "max_regions": 3,
+      "monthly_price": {
+       "raw": 70000,
+       "yuan": "7.00"
+      },
+      "traffic": {
+       "extra_price": {
+        "raw": 50000,
+        "yuan": "5.00"
+       },
+       "max_gb": 3000,
+       "min_gb": 300,
+       "price": {
+        "raw": 50000,
+        "yuan": "5.00"
+       },
+       "step_gb": 100,
+       "tiers": [
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 200,
+         "up_to_gb": 399
+        },
+        {
+         "discount": 0,
+         "max_bandwidth_mbps": 300,
+         "up_to_gb": 3000
+        }
+       ]
+      },
+      "traffic_price": {
+       "raw": 0,
+       "yuan": "0.00"
+      },
+      "whitelist": true
+     }
+    ],
+    "provisionable": true,
+    "pve_node": "pve3",
+    "region": "shanghai",
+    "sort_order": 0,
+    "status": "active",
+    "traffic_direction": "both",
+    "updated_at": "2026-10-12T23:47:10.990887+08:00"
+   }
+  ]
+ }
+}

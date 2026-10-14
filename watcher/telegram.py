@@ -144,11 +144,14 @@ STOCK_MENU_CALLBACK = "stock:menu"
 STOCK_PROVIDER_PREFIX = "stock:provider:"
 ROUTE_STATUS_CALLBACK = "route:misaka"
 ROUTE_BACK_CALLBACK = "route:back"
+AUTOBUY_CALLBACK = "autobuy:menu"
+STATUS_BACK_CALLBACK = "status:menu"
 STOCK_MESSAGE_LIMIT = 3900
 
 BOT_COMMANDS = [
     {"command": "status", "description": "查看监控状态"},
     {"command": "stock", "description": "查询当前可购买库存"},
+    {"command": "autobuy", "description": "查看抢购程序"},
 ]
 
 
@@ -161,7 +164,19 @@ def status_menu_markup(route_enabled: bool = False) -> Dict[str, Any]:
     rows.append(
         [{"text": "⏱ 设置扫描间隔", "callback_data": INTERVAL_MENU_CALLBACK}]
     )
+    rows.append([{"text": "🛒 抢购程序", "callback_data": AUTOBUY_CALLBACK}])
     return {"inline_keyboard": rows}
+
+
+def autobuy_markup() -> Dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔄 刷新", "callback_data": AUTOBUY_CALLBACK},
+                {"text": "← 返回状态", "callback_data": STATUS_BACK_CALLBACK},
+            ]
+        ]
+    }
 
 
 def route_status_markup() -> Dict[str, Any]:

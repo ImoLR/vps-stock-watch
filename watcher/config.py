@@ -25,6 +25,9 @@ def load_config(path: str) -> Dict[str, Any]:
     config["state_path"] = str(
         (config_path.parent / str(config.get("state_path", "data/state.json"))).resolve()
     )
+    config["autobuy_status_dir"] = str(
+        (config_path.parent / str(config.get("autobuy_status_dir", "data/autobuy"))).resolve()
+    )
     route_watch = config.get("route_watch")
     if route_watch is not None:
         if not isinstance(route_watch, dict):

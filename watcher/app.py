@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from .autobuy_status import format_autobuy_status, load_statuses
 from .config import load_config, telegram_credentials
 from .isolated_scan import fetch_products_isolated, terminate_active_scans
 from .models import Product
@@ -23,12 +24,14 @@ from .route_watch import (
 )
 from .state import StateStore
 from .telegram import (
+    AUTOBUY_CALLBACK,
     BOT_COMMANDS,
     INTERVAL_BACK_CALLBACK,
     INTERVAL_MENU_CALLBACK,
     INTERVAL_PROVIDER_PREFIX,
     ROUTE_BACK_CALLBACK,
     ROUTE_STATUS_CALLBACK,
+    STATUS_BACK_CALLBACK,
     STOCK_MENU_CALLBACK,
     STOCK_PROVIDER_PREFIX,
     TelegramClient,
@@ -46,6 +49,7 @@ from .telegram import (
     stock_menu_markup,
     stock_provider_markup,
     status_menu_markup,
+    autobuy_markup,
     route_status_markup,
 )
 
@@ -375,6 +379,11 @@ class WatcherApp:
             self.send_stock_menu(refresh_disk=True)
             LOG.info("answered Telegram /stock from state")
             return
+        if self._authorized(chat_id, user_id) and command == "/autobuy":
+            self._pending_interval_provider = None
+            self.send_autobuy_status()
+            LOG.info("answered Telegram /autobuy")
+            return
         if not self._authorized(chat_id, user_id) or not self._pending_interval_provider:
             return
         if text.casefold() == "取消".casefold():
@@ -416,9 +425,13 @@ class WatcherApp:
         elif data == INTERVAL_BACK_CALLBACK:
             self._pending_interval_provider = None
             self.send_status_menu()
-        elif data == ROUTE_BACK_CALLBACK:
+        elif data in (ROUTE_BACK_CALLBACK, STATUS_BACK_CALLBACK):
             self._pending_interval_provider = None
             self.send_status_menu()
+        elif data == AUTOBUY_CALLBACK:
+            self._pending_interval_provider = None
+            self.send_autobuy_status()
+            LOG.info("answered Telegram auto-buy status")
         elif data == ROUTE_STATUS_CALLBACK and self.route_store:
             self._pending_interval_provider = None
             self.send_route_status(refresh_disk=True)
@@ -478,6 +491,10 @@ class WatcherApp:
             ),
             status_menu_markup(route_enabled=bool(self.route_config)),
         )
+
+    def send_autobuy_status(self) -> None:
+        directory = str(self.config.get("autobuy_status_dir") or "data/autobuy")
+        self._send_telegram(format_autobuy_status(load_statuses(directory)), autobuy_markup())
 
     def send_route_status(self, refresh_disk: bool = False) -> None:
         route_state = self._route_state(refresh_disk)

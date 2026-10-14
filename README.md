@@ -3,7 +3,7 @@
 一个面向多 VPS/IDC 商家的轻量监控器。Provider 只负责把站点转换成统一
 `Product`；完整目录比较、JSON 状态、失败退避、Telegram 和 `/status` 都在核心层。
 
-内置 NexKr、DMIT、Blossom Host、BOILCLOUD、FACHOST、LeiKwanHost、利群汇聚、VMSILO 与 Misaka，
+内置 NexKr、NewNB、DMIT、Blossom Host、BOILCLOUD、FACHOST、LeiKwanHost、利群汇聚、VMSILO 与 Misaka，
 同时提供 CSS、XPath、Regex、JSONPath 规则，可用 YAML 接入结构简单的网站；复杂网站继续
 增加 Python Provider。
 
@@ -227,6 +227,23 @@ baseline 会被丢弃。LG、目标可达性、schema 或 ASN 覆盖率失败时
 `/status` 显示 Route Watch 健康信息，并提供“Misaka 当前线路”只读按钮；点击只读 state，
 不会立即发起 traceroute。
 
+### NewNB Cloud
+
+[nnb.ltd](https://nnb.ltd/dashboard/create) 是 Nuxt SPA，下单页调用公开的
+`GET https://api.nnb.ltd/api/v1/nodes`（无需登录）。NewNB 不卖固定套餐：每个节点有资源
+上下限、按单位计价的月费和若干网卡（NIC），每个 NIC 有自己的月费和流量。Provider 为每个
+「节点 + 主网卡」生成一个 Product，价格取全部资源最低时的起步价（`base + NIC 月费`，
+计价公式照搬站点 bundle）。接口没有库存数字，`stock=null`；节点 `orderable=true` 且
+`status=active` 视为有货，售罄时节点被关闭或下架。一次 GET 约 0.7 秒、6 KB，间隔 60 秒。
+
+`python -m watcher.nnb_autobuy` 是一次性的抢购程序：每 5 秒拉一次节点列表，发现名称/分组/
+说明/网卡含关键词（默认 `港`、`HK`）且有移动入口（CM）的可下单节点后，按最低配置下单。
+余额够就 `POST /user/services` 直接扣款开通；不够就 `POST /user/services/checkout` 创建
+支付订单并把链接发到 Telegram（付款后才开通，不占库存）。移动入口要求账号已完成 KYC，并且
+需要白名单地区（默认 `100000` 不确定地区）。账号来自环境变量 `NNB_USERNAME` /
+`NNB_PASSWORD`，登录没有验证码，token 保存在 `data/nnb_token.txt`；成功后写
+`data/nnb_autobuy_done.json` 并退出，之后不会再买。
+
 参考结构：[NOAFF Restock Monitor](https://github.com/cshaizhihao/noaff-restock-monitor)
 的通用规则、WHMCS 和商品去重思想，以及
 [近期 DMIT 页面解析样例](https://github.com/Ra2fSt/dmit-monitor)。本项目代码为独立实现。
@@ -314,11 +331,12 @@ PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" \
 
 ## Telegram
 
-Bot 使用标准 `sendMessage` 发通知，用 `getUpdates` 接收 `/status` 和 `/stock`。启动时通过
-`setMyCommands` 注册：
+Bot 使用标准 `sendMessage` 发通知，用 `getUpdates` 接收 `/status`、`/stock` 和 `/autobuy`。
+启动时通过 `setMyCommands` 注册：
 
 - `/status`：查看监控状态；
-- `/stock`：查询当前可购买库存。
+- `/stock`：查询当前可购买库存；
+- `/autobuy`：查看抢购程序（也可在 `/status` 点“🛒 抢购程序”）。
 
 `/status` 显示
 Provider 数量、各 Provider 最近检查/成功时间、商品数、有货数、累计新品/通知数和最近
@@ -351,6 +369,11 @@ Provider 数量、各 Provider 最近检查/成功时间、商品数、有货数
 无需重启；服务或 VPS 重启后继续使用最后保存的值。未设置覆盖值时使用 `config.yaml`
 中该 Provider 的 `interval_seconds`。调度器按 Provider 保存独立 deadline，并且同一个
 Provider 完成当前抓取后才安排下一轮，不会堆积重入任务或多个 Chromium。
+
+抢购程序（`watcher.nexkr_autobuy`、`watcher.nnb_autobuy`）是独立进程，各自每 30 秒以及
+状态变化时原子写入 `data/autobuy/<name>.json`（目标、轮询间隔、当前库存状态、结果）。
+主 Bot 只读这些文件：心跳超过 `max(30, 轮询间隔) × 3 + 30` 秒未更新显示为“已停止”，
+写了结果的显示为“已抢到”。目录可用 `autobuy_status_dir` 配置。
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=123456789:replace_me

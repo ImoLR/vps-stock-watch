@@ -157,6 +157,7 @@ class StockQueryTests(unittest.TestCase):
             [
                 {"command": "status", "description": "查看监控状态"},
                 {"command": "stock", "description": "查询当前可购买库存"},
+                {"command": "autobuy", "description": "查看抢购程序"},
             ],
         )
         self.app.configure_bot_commands()

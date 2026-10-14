@@ -55,6 +55,15 @@ providers:
     timeout_seconds: 25
     max_backoff_seconds: 1800
 
+  # NewNB Cloud: public JSON node list, one product per node + primary NIC.
+  # The SH-HK CM launch is handled by watcher.nnb_autobuy, not this poller.
+  - name: nnb
+    type: nnb
+    enabled: true
+    interval_seconds: 60
+    timeout_seconds: 20
+    max_backoff_seconds: 1800
+
   - name: dmit
     type: dmit
     enabled: true
