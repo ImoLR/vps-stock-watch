@@ -386,6 +386,55 @@ TELEGRAM_BOT_TOKEN=123456789:replace_me
 TELEGRAM_CHAT_ID=123456789
 ```
 
+## 抢购程序：重新开抢与踩过的坑
+
+两个抢购程序都只为一次活动写的，抢完后服务和账号凭据都已清理，代码保留下来供下次复用。
+
+**重新开抢**：账号写进 `data/<站点>_account.env`（`chmod 600`；NexKr 用
+`NEXKR_EMAIL`/`NEXKR_PASSWORD`，NewNB 用 `NNB_USERNAME`/`NNB_PASSWORD`）。
+如果旧的 `*_done.json` 还在，先改名归档，否则程序不会再买。然后用临时 unit 启动：
+它不会随重启自动恢复，活动结束后 `systemctl stop` 就会消失。
+
+```bash
+cd /root/projects/vps-stock-watch/vps-stock-watch
+systemd-run --unit nexkr-autobuy --working-directory "$PWD" \
+  -p EnvironmentFile="$PWD/.env" -p EnvironmentFile="$PWD/data/nexkr_account.env" \
+  -p MemoryMax=600M -p Restart=on-failure -p RestartSec=1min \
+  /usr/bin/xvfb-run -a "$PWD/.venv/bin/python" -m watcher.nexkr_autobuy \
+  --slug <商品 slug> --interval 5 --code <优惠码>
+# NewNB 不需要浏览器：
+#   … -m watcher.nnb_autobuy --interval 5   （MemoryMax=300M，不用 xvfb-run）
+```
+
+正式开抢前先用 `--dry-run` 跑一轮；NexKr 可先用 `--login-only` 确认能登录。
+抢完后 `systemctl stop <unit>`，删除 `data/<站点>_account.env` 和 cookie/token 文件。
+
+**NexKr 的坑（2026 国庆活动）**
+
+- 登录有 reCAPTCHA v3，只能用 Playwright 起有界面的 Chromium 登录，所以要套 `xvfb-run`。
+  下单和用余额付款不需要验证码。
+- 程序自动登录会把用户自己在网站上的登录挤掉。凡是需要用户去网站上操作（付款失败、
+  余额不足、有货时掉登录），程序都会创建 `data/nexkr_manual_login` 并停止自动登录；
+  用户处理完后删掉这个文件就会恢复。
+- 目录里会出现 `in_stock: true`，但所有区都在 `zone_sold_out` 里。最早把售罄区过滤掉后
+  没有区可选，下单不带区，返回 400“请选择区域”；后来改成也去售罄区下单，每 5 秒一次，
+  两天里打出了约 1.17 万个 409。现在只在没标售罄的区下单；全部售罄时只看目录、
+  不调用下单接口。每轮重新读取区域，所以商品换区也能跟上。
+- 优惠码只要有一个被拒，整单就会失败（400 `coupon_rejected`）。所以缺货期间每 10 分钟
+  用 `/orders/quote` 预检一次，丢掉被拒的码；下单时如果还是 `coupon_rejected`，
+  就去掉优惠码重下。SMSVERIFYFEE 和 WELCOME@NEXKR 当时可以叠加。
+- 下单后余额不足时保留订单，并发 Telegram 让用户手动付款。
+- Telegram 写的 `data/autobuy/<name>.control` 里的 `interval` 会覆盖命令行的 `--interval`。
+
+**NewNB 的坑（2026-10 沪港 CM 上架）**
+
+- 登录没有验证码。移动入口要求账号已完成 KYC，还要选白名单地区（默认 `100000`
+  不确定地区）。
+- 余额不够时只能创建支付订单；付款前不开通，也不占库存，所以要提前充好余额。
+- 刚上架时买到的那台是管理员测试，几分钟后被终止退款；后来在 Telegram 里重新启动才
+  真正买到。抢到后要去面板确认服务没有被终止。
+- CM 入口从海外 SSH 连不上，开通后要在国内测试登录。
+
 ## YAML 规则 Provider
 
 `config.yaml` 内含 CSS 示例。规则引擎支持：
