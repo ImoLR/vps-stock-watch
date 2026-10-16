@@ -171,7 +171,7 @@ class BoilcloudProvider(BaseProvider):
             "requests": self._scan_request_count,
             "duration_seconds": round(duration, 3),
         }
-        LOG.info(
+        LOG.debug(
             "BOILCLOUD complete catalog categories=%d routes=%d products=%d "
             "available=%d numeric_stock=%d duplicate_pids=%d requests=%d duration=%.3fs",
             self.last_scan_stats["categories"],

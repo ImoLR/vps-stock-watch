@@ -210,7 +210,7 @@ class LeikwanhostProvider(BaseProvider):
             "requests": self._scan_request_count,
             "duration_seconds": round(duration, 3),
         }
-        LOG.info(
+        LOG.debug(
             "LeiKwanHost complete catalog categories=%d products=%d available=%d "
             "numeric_stock=%d duplicates=%d requests=%d duration=%.3fs",
             self.last_scan_stats["categories"],

@@ -80,7 +80,7 @@ class LiqunHuijuProvider(BaseProvider):
             "requests": self._scan_request_count,
             "duration_seconds": round(duration, 3),
         }
-        LOG.info(
+        LOG.debug(
             "Liqun Huiju complete public catalog pages=%d products=%d "
             "empty_mode=%s requests=%d duration=%.3fs",
             catalog_pages,

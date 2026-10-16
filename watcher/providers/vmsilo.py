@@ -158,7 +158,7 @@ class VmsiloProvider(BaseProvider):
             "duration_seconds": round(duration, 3),
             "browser_required": False,
         }
-        LOG.info(
+        LOG.debug(
             "VMSILO complete catalog categories=%d products=%d available=%d "
             "numeric_stock=%d hidden=%d duplicates=%d requests=%d duration=%.3fs",
             self.last_scan_stats["categories"],

@@ -286,7 +286,7 @@ class WatcherApp:
             ).isoformat().replace("+00:00", "Z")
 
     def check(self, provider: BaseProvider) -> bool:
-        LOG.info("checking provider=%s", provider.name)
+        LOG.debug("checking provider=%s", provider.name)
         try:
             products = self._fetch_products(provider)
             with self._lock:
@@ -301,7 +301,9 @@ class WatcherApp:
                 if not first_run:
                     changes.extend(additional_changes)
                 self.store.save()
-            LOG.info(
+            # Unchanged scans are the common case; keep them out of the journal.
+            LOG.log(
+                logging.INFO if first_run or changes else logging.DEBUG,
                 "provider=%s success products=%d baseline=%s changes=%d",
                 provider.name,
                 len(products),

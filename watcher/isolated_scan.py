@@ -179,7 +179,7 @@ def _create_scan_cgroup(
         # The worker blocks reading its config from stdin, so it cannot start
         # Chromium before it has been moved into this delegated cgroup.
         (cgroup / "cgroup.procs").write_text(str(pid), encoding="ascii")
-        LOG.info(
+        LOG.debug(
             "isolated scan cgroup ready high_mb=%s max_mb=%s",
             high_mb,
             max_mb,
