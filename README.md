@@ -108,6 +108,15 @@ BOILCLOUD 当前使用 WHMCS 服务端商城 HTML，不使用 Playwright。普�
 都完整成功后才会提交 snapshot 并允许 `removed_product`。默认间隔为 120 秒，运行时仍可
 通过 Telegram 输入任意 10–86400 范围内的整数秒数并原样持久化。
 
+2026-10-18 起，BOILCLOUD 的补货、售罄和库存数字变化暂停发送 Telegram（仍照常写入 state，
+`/status`、`/stock` 不受影响），只有两类商品例外：SeedNet 线路（名称、分类名或商品说明含
+SeedNet，不分大小写，`Seed Net` 也算）和年付商品（卡片付款周期为年繳/annually，或名称、
+分类名、说明含“年付/年繳”，“半年付”不算）。每个台湾分类的标题都写着
+“HiNet/SeedNet/Kbro/…”，所以分类标题不参与判断，否则所有 HiNet 商品都会被算进去。新品、
+下架和价格变化照常通知。分类卡片只显示一个付款周期，月付和年付并存的商品只有下单页才看得到
+年付选项；Provider 不打开下单页，这种商品要靠名称或说明里的“年付”才能识别。恢复全部库存
+通知时删除 `BoilcloudProvider.should_notify`，调整例外范围改 `STOCK_ALERT_TEXT`。
+
 ### FACHOST
 
 FACHOST 官方主站和公开商城位于 `https://fachost.cloud/`，使用 Paymenter + Livewire，

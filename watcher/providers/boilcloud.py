@@ -11,7 +11,7 @@ from xml.etree import ElementTree
 import requests
 from bs4 import BeautifulSoup, Tag
 
-from ..models import Product
+from ..models import Change, ChangeType, Product
 from .base import BaseProvider, FetchError, ParseError, is_challenge_page
 
 
@@ -41,6 +41,12 @@ class BoilcloudProvider(BaseProvider):
         "糟糕，發生問題了",
         "oops, there's a problem",
     )
+    # Restock, sold-out and stock-count changes only notify for SEEDNET lines
+    # and annual plans. Every other change (new, removed, price, name) does.
+    STOCK_CHANGE_TYPES = frozenset(
+        (ChangeType.RESTOCK, ChangeType.SOLD_OUT, ChangeType.STOCK)
+    )
+    STOCK_ALERT_TEXT = re.compile(r"seed[\s-]*net|(?<!半)年[付繳缴]", re.I)
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -340,6 +346,28 @@ class BoilcloudProvider(BaseProvider):
                 "stock_source": stock_source,
             },
         )
+
+    def should_notify(self, change: Change) -> bool:
+        if change.type in self.STOCK_CHANGE_TYPES and not self._stock_alerts(
+            change.product
+        ):
+            return False
+        return super().should_notify(change)
+
+    @classmethod
+    def _stock_alerts(cls, product: Product) -> bool:
+        # The category heading is left out on purpose: every Taiwan category
+        # heading lists "HiNet/SeedNet/Kbro/...", including HiNet-only plans.
+        if product.billing_cycle == "yearly":
+            return True
+        text = " ".join(
+            (
+                product.name,
+                product.category or "",
+                str(product.metadata.get("description") or ""),
+            )
+        )
+        return bool(cls.STOCK_ALERT_TEXT.search(text))
 
     def _fetch_document(self, url: str) -> FetchedDocument:
         attempts = max(1, int(self.config.get("retry_attempts", 2)))

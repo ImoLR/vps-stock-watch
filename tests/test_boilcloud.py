@@ -33,7 +33,7 @@ def category_html(categories, products, current=None, empty=False, group_id=None
             <div class="tt-single-product" id="product{pid}">
               <div class="tt-product-name"><h5 id="product{pid}-name">{name}</h5></div>
               <div class="product-pricing"><span class="price">{price}</span>
-                <span data-key="monthly">月繳</span></div>
+                <span data-key="{cycle_key}">{cycle_text}</span></div>
               <span class="qty">{stock} <span data-key="available">可用</span></span>
               <div id="product{pid}-description">
                 <strong>{region}</strong><br>
@@ -48,6 +48,8 @@ def category_html(categories, products, current=None, empty=False, group_id=None
                 pid=item["pid"],
                 name=item.get("name", "Plan %s" % item["pid"]),
                 price=item.get("price", "$10.00 USD"),
+                cycle_key=item.get("cycle", ("monthly", "月繳"))[0],
+                cycle_text=item.get("cycle", ("monthly", "月繳"))[1],
                 stock=item.get("stock", 0),
                 region=item.get("region", "香港"),
                 bandwidth=item.get("bandwidth", "500Mbps 共享頻寬"),
@@ -72,18 +74,29 @@ def category_html(categories, products, current=None, empty=False, group_id=None
     )
 
 
-def boil_product(pid="1", stock=0, price="$10.00 USD", name="Public VPS"):
+def boil_product(
+    pid="1",
+    stock=0,
+    price="$10.00 USD",
+    name="Public VPS",
+    billing_cycle="monthly",
+    description="",
+):
     return Product(
         provider="boilcloud",
         product_id=pid,
         name=name,
         category="Public",
         price=price,
-        billing_cycle="monthly",
+        billing_cycle=billing_cycle,
         stock=stock,
         available=stock > 0,
         url="https://cloud.boil.network/cart.php?a=add&pid=%s" % pid,
+        metadata={"description": description},
     )
+
+
+SEEDNET_NAME = "20區 - 靜態 SeedNet 500Mbps VPS"
 
 
 class FakeTelegram:
@@ -133,6 +146,51 @@ class BoilcloudProviderTests(unittest.TestCase):
         self.assertEqual(item.specs["traffic"], "5TB 流量")
         self.assertEqual(item.url, "https://cloud.boil.network/cart.php?a=add&pid=381")
         self.assertTrue(self.provider.should_notify(Change(ChangeType.NEW, item)))
+        self.assertFalse(self.provider.should_notify(Change(ChangeType.RESTOCK, item)))
+
+    def test_annual_card_is_yearly_and_keeps_stock_notifications(self):
+        html = category_html(
+            [("hk", "香港家寬")],
+            [{"pid": "600", "stock": 1, "cycle": ("annually", "年繳")}],
+            current="hk",
+        )
+        item = self.provider.parse_category(
+            html, "https://cloud.boil.network/store/hk", "hk", "香港家寬"
+        )[0]
+        self.assertEqual(item.billing_cycle, "yearly")
+        self.assertTrue(self.provider.should_notify(Change(ChangeType.RESTOCK, item)))
+
+    def test_stock_changes_notify_only_for_seednet_and_annual_plans(self):
+        hinet = boil_product(
+            name="16區 - 靜態 HiNet 500Mbps VPS",
+            description="台灣\nHiNet 獨立 IPv4 ×1",
+        )
+        # Every Taiwan category heading names SeedNet; that alone must not count.
+        hinet.metadata["category_heading"] = (
+            "HiNet/SeedNet/Kbro/遠傳/台哥大/中華電信 本地住宅ISP家寬"
+        )
+        cases = [
+            (boil_product(name=SEEDNET_NAME), True),
+            (boil_product(description="台灣\nSeed Net 獨立 IPv4 ×1"), True),
+            (boil_product(billing_cycle="yearly"), True),
+            (boil_product(name="年付 HKT 500Mbps VPS"), True),
+            (boil_product(description="年繳送 1TB 流量"), True),
+            (hinet, False),
+            (boil_product(name="半年付 HKT 500Mbps VPS"), False),
+        ]
+        stock_types = (ChangeType.RESTOCK, ChangeType.SOLD_OUT, ChangeType.STOCK)
+        for change_type in ChangeType:
+            for item, stock_alerts in cases:
+                with self.subTest(
+                    change_type=change_type,
+                    name=item.name,
+                    description=item.metadata["description"],
+                    cycle=item.billing_cycle,
+                ):
+                    self.assertEqual(
+                        self.provider.should_notify(Change(change_type, item, item)),
+                        stock_alerts or change_type not in stock_types,
+                    )
 
     def test_full_discovery_uses_navigation_sidebar_and_sitemap_and_deduplicates_pid(self):
         categories = [("alpha", "Alpha"), ("beta", "Beta")]
@@ -273,18 +331,37 @@ class BoilcloudLifecycleTests(unittest.TestCase):
         self.assertEqual(app.telegram.sent, [])
         self.assertEqual(len(app.store.provider("boilcloud")["products"]), 2)
 
-    def test_zero_to_one_restock_notifies(self):
+    def test_zero_to_one_restock_is_silent(self):
         app = self.exercise([boil_product(stock=0)], [boil_product(stock=1)])
+        self.assertEqual(app.telegram.sent, [])
+        self.assertTrue(
+            app.store.provider("boilcloud")["products"]["boilcloud:1"]["available"]
+        )
+
+    def test_one_to_zero_sold_out_is_silent(self):
+        app = self.exercise([boil_product(stock=1)], [boil_product(stock=0)])
+        self.assertEqual(app.telegram.sent, [])
+
+    def test_numeric_stock_change_is_silent_but_saved(self):
+        app = self.exercise([boil_product(stock=5)], [boil_product(stock=4)])
+        self.assertEqual(app.telegram.sent, [])
+        self.assertEqual(
+            app.store.provider("boilcloud")["products"]["boilcloud:1"]["stock"], 4
+        )
+
+    def test_seednet_restock_notifies(self):
+        app = self.exercise(
+            [boil_product(stock=0, name=SEEDNET_NAME)],
+            [boil_product(stock=1, name=SEEDNET_NAME)],
+        )
         self.assertEqual(len(app.telegram.sent), 1)
         self.assertIn("🔥 BOILCLOUD 补货", app.telegram.sent[0][0])
 
-    def test_one_to_zero_sold_out_notifies(self):
-        app = self.exercise([boil_product(stock=1)], [boil_product(stock=0)])
-        self.assertEqual(len(app.telegram.sent), 1)
-        self.assertIn("🔴 BOILCLOUD 售罄", app.telegram.sent[0][0])
-
-    def test_numeric_stock_change_notifies(self):
-        app = self.exercise([boil_product(stock=5)], [boil_product(stock=4)])
+    def test_annual_stock_change_notifies(self):
+        app = self.exercise(
+            [boil_product(stock=5, billing_cycle="yearly")],
+            [boil_product(stock=4, billing_cycle="yearly")],
+        )
         self.assertEqual(len(app.telegram.sent), 1)
         self.assertIn("📦 BOILCLOUD 库存变化", app.telegram.sent[0][0])
 
