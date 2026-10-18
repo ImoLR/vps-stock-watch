@@ -284,13 +284,46 @@ class RouteLifecycleTests(unittest.TestCase):
             new["fingerprint"],
         )
         self.assertEqual(len(self.messages), 1)
-        self.assertIn("CTG/CN2 path feature", self.messages[0])
+        self.assertIn("精品线路：无 → CN2", self.messages[0])
 
         restarted.enrich_and_normalize = lambda *_args: old
         self.assertTrue(restarted.run_cycle())
         self.assertEqual(len(self.messages), 1)
         self.assertTrue(restarted.run_cycle())
         self.assertEqual(len(self.messages), 2)
+
+    def test_confirmed_change_without_premium_network_moves_baseline_silently(self):
+        old = snapshot(["AS917", "AS58453", "AS9808", "AS4837", "AS17816", "AS17623"])
+        new = snapshot(["AS917", "AS58453", "AS9808", "AS17623"])
+        self.set_snapshots([old, new, new])
+        for _ in range(3):
+            self.assertTrue(self.watcher.run_cycle())
+        route = self.store.data["routes"]["234:telecom"]
+        self.assertEqual(route["baseline"]["fingerprint"], new["fingerprint"])
+        self.assertIsNotNone(route["last_change_at"])
+        self.assertEqual(self.messages, [])
+
+    def test_only_premium_network_changes_are_notified(self):
+        cases = [
+            # Ordinary transit flap, as seen on HK -> Guangdong Unicom.
+            (["AS917", "AS58453", "AS4837", "AS17623"], ["AS917", "AS58453", "AS17623"], None),
+            # Still CN2 before and after; only the transit around it moved.
+            (["AS23961", "AS4809", "AS4134"], ["AS23961", "AS969", "AS4809", "AS4134"], None),
+            (["AS917", "AS58453", "AS4134"], ["AS917", "AS4809", "AS4134"], "无 → CN2"),
+            (["AS917", "AS4809", "AS4134"], ["AS917", "AS3356", "AS4134"], "CN2 → 无"),
+            (["AS917", "AS4809", "AS4134"], ["AS917", "AS23764", "AS4134"], "CN2 → CTG"),
+            (["AS917", "AS4837", "AS17623"], ["AS917", "AS10099", "AS9929", "AS17623"], "无 → 9929"),
+            (["AS917", "AS58453", "AS56040"], ["AS917", "AS58807", "AS9808", "AS56040"], "无 → CMIN2"),
+        ]
+        for old, new, premium in cases:
+            with self.subTest(old=old, new=new):
+                change = RouteChange("234:telecom", node(), target(), snapshot(old), snapshot(new))
+                messages = self.watcher._change_messages([change], [target()])
+                if premium is None:
+                    self.assertEqual(messages, [])
+                else:
+                    self.assertEqual(len(messages), 1)
+                    self.assertIn("精品线路：%s" % premium, messages[0])
 
     def test_same_asn_path_ignores_rtt_and_interface_changes(self):
         first = snapshot(["AS917", "AS58453", "AS4134"], 30)
@@ -364,11 +397,12 @@ class RouteLifecycleTests(unittest.TestCase):
             self.watcher._cycle_lock.release()
         self.assertEqual(self.store.snapshot(), before)
 
-    def test_feature_detection_covers_cn2_cmi_and_cug(self):
-        features = route_features(["AS917", "AS4809", "AS58453", "AS10099"])
-        self.assertIn("CTG/CN2 path feature", features)
-        self.assertIn("CMI", features)
-        self.assertIn("CUG", features)
+    def test_feature_detection_covers_premium_networks_cmi_and_cug(self):
+        features = route_features(
+            ["AS917", "AS4809", "AS23764", "AS9929", "AS58807", "AS58453", "AS10099"]
+        )
+        for label in ("CN2", "CTG", "9929", "CMIN2", "CMI", "CUG"):
+            self.assertIn(label, features)
 
 
 class RouteTelegramTests(unittest.TestCase):

@@ -24,6 +24,15 @@ PING_SX_API = "https://public-us-pingsx.api.clonoth.com/v2"
 PING_SX_WS = "wss://public-us-pingsx.api.clonoth.com/v2/probe/ws"
 MISAKA_CATALOG_API = "https://app.misaka.io/api/mc2"
 PING_SX_ORIGIN = "https://misaka.ping.sx"
+# Carrier premium networks. A confirmed route change is only sent to Telegram
+# when it adds, drops or swaps one of these; other changes just move the
+# baseline. CN2 GIA and CN2 GT share AS4809 and are not told apart.
+PREMIUM_NETWORKS = {
+    "AS4809": "CN2",
+    "AS23764": "CTG",
+    "AS9929": "9929",
+    "AS58807": "CMIN2",
+}
 LOG = logging.getLogger(__name__)
 
 
@@ -698,12 +707,24 @@ class MisakaRouteWatcher:
     def _change_messages(
         self, changes: List[RouteChange], targets: List[Dict[str, Any]]
     ) -> List[str]:
-        if not changes:
+        notable = []
+        for change in changes:
+            if premium_networks(change.previous) == premium_networks(change.current):
+                LOG.info(
+                    "Misaka Route Watch change not notified (no premium network change) "
+                    "route=%s path=%s -> %s",
+                    change.route_key,
+                    change.previous.get("fingerprint"),
+                    change.current.get("fingerprint"),
+                )
+            else:
+                notable.append(change)
+        if not notable:
             return []
         from .telegram import format_route_changes
 
         groups: Dict[Tuple[str, str], List[RouteChange]] = {}
-        for change in changes:
+        for change in notable:
             groups.setdefault(
                 (str(change.node["id"]), str(change.target["operator"])), []
             ).append(change)
@@ -781,10 +802,15 @@ def normalized_asn_path(hops: Iterable[Dict[str, Any]]) -> List[str]:
     return result
 
 
+def premium_networks(snapshot: Dict[str, Any]) -> List[str]:
+    path = snapshot.get("normalized_asn_path") if isinstance(snapshot, dict) else None
+    values = set(path) if isinstance(path, list) else set()
+    return [label for asn, label in PREMIUM_NETWORKS.items() if asn in values]
+
+
 def route_features(path: Iterable[str]) -> List[str]:
     values = set(path)
-    mapping = [
-        ("AS4809", "CTG/CN2 path feature"),
+    mapping = list(PREMIUM_NETWORKS.items()) + [
         ("AS58453", "CMI"),
         ("AS10099", "CUG"),
         ("AS4134", "China Telecom"),

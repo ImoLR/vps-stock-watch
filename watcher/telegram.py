@@ -731,6 +731,8 @@ def format_status(
 
 
 def format_route_changes(changes: List[Any], operator_target_count: int) -> str:
+    from .route_watch import premium_networks
+
     first = changes[0]
     node = first.node
     operator = first.target.get("operator")
@@ -754,6 +756,11 @@ def format_route_changes(changes: List[Any], operator_target_count: int) -> str:
         "",
         "原路径：%s" % html.escape(_route_path(previous)),
         "当前路径：%s" % html.escape(_route_path(current)),
+        "精品线路：%s → %s"
+        % (
+            html.escape("、".join(premium_networks(previous)) or "无"),
+            html.escape("、".join(premium_networks(current)) or "无"),
+        ),
         "关键变化：%s" % html.escape("；".join(feature_changes) or "Transit ASN 路径改变"),
         "一致性：%d/%d 个%s目标确认变化"
         % (len(changes), max(operator_target_count, len(changes)), html.escape(_operator_name(operator))),
