@@ -303,12 +303,12 @@ class RouteLifecycleTests(unittest.TestCase):
         self.assertIsNotNone(route["last_change_at"])
         self.assertEqual(self.messages, [])
 
-    def test_only_premium_network_changes_are_notified(self):
+    def test_only_changes_involving_a_premium_network_are_notified(self):
         cases = [
-            # Ordinary transit flap, as seen on HK -> Guangdong Unicom.
+            # Ordinary transit flap via CMI, as seen on HK -> Guangdong Unicom.
             (["AS917", "AS58453", "AS4837", "AS17623"], ["AS917", "AS58453", "AS17623"], None),
             # Still CN2 before and after; only the transit around it moved.
-            (["AS23961", "AS4809", "AS4134"], ["AS23961", "AS969", "AS4809", "AS4134"], None),
+            (["AS23961", "AS4809", "AS4134"], ["AS23961", "AS969", "AS4809", "AS4134"], "CN2 → CN2"),
             (["AS917", "AS58453", "AS4134"], ["AS917", "AS4809", "AS4134"], "无 → CN2"),
             (["AS917", "AS4809", "AS4134"], ["AS917", "AS3356", "AS4134"], "CN2 → 无"),
             (["AS917", "AS4809", "AS4134"], ["AS917", "AS23764", "AS4134"], "CN2 → CTG"),

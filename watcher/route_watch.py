@@ -24,9 +24,10 @@ PING_SX_API = "https://public-us-pingsx.api.clonoth.com/v2"
 PING_SX_WS = "wss://public-us-pingsx.api.clonoth.com/v2/probe/ws"
 MISAKA_CATALOG_API = "https://app.misaka.io/api/mc2"
 PING_SX_ORIGIN = "https://misaka.ping.sx"
-# Carrier premium networks. A confirmed route change is only sent to Telegram
-# when it adds, drops or swaps one of these; other changes just move the
-# baseline. CN2 GIA and CN2 GT share AS4809 and are not told apart.
+# Carrier premium networks, half or full premium alike. A confirmed route
+# change is only sent to Telegram when the old or the new path uses one of
+# these; other changes just move the baseline. CN2 GIA and CN2 GT share
+# AS4809 and are not told apart.
 PREMIUM_NETWORKS = {
     "AS4809": "CN2",
     "AS23764": "CTG",
@@ -709,16 +710,16 @@ class MisakaRouteWatcher:
     ) -> List[str]:
         notable = []
         for change in changes:
-            if premium_networks(change.previous) == premium_networks(change.current):
+            if premium_networks(change.previous) or premium_networks(change.current):
+                notable.append(change)
+            else:
                 LOG.info(
-                    "Misaka Route Watch change not notified (no premium network change) "
+                    "Misaka Route Watch change not notified (no premium network) "
                     "route=%s path=%s -> %s",
                     change.route_key,
                     change.previous.get("fingerprint"),
                     change.current.get("fingerprint"),
                 )
-            else:
-                notable.append(change)
         if not notable:
             return []
         from .telegram import format_route_changes
