@@ -312,7 +312,13 @@ class RouteLifecycleTests(unittest.TestCase):
             (["AS917", "AS58453", "AS4134"], ["AS917", "AS4809", "AS4134"], "无 → CN2"),
             (["AS917", "AS4809", "AS4134"], ["AS917", "AS3356", "AS4134"], "CN2 → 无"),
             (["AS917", "AS4809", "AS4134"], ["AS917", "AS23764", "AS4134"], "CN2 → CTG"),
-            (["AS917", "AS4837", "AS17623"], ["AS917", "AS10099", "AS9929", "AS17623"], "无 → 9929"),
+            (["AS917", "AS4837", "AS17623"], ["AS917", "AS9929", "AS17623"], "无 → 9929"),
+            (["AS917", "AS4837", "AS17623"], ["AS917", "AS10099", "AS4837", "AS17623"], "无 → 10099"),
+            (
+                ["AS917", "AS10099", "AS4837", "AS17623"],
+                ["AS917", "AS10099", "AS9929", "AS17623"],
+                "10099 → 9929、10099",
+            ),
             (["AS917", "AS58453", "AS56040"], ["AS917", "AS58807", "AS9808", "AS56040"], "无 → CMIN2"),
         ]
         for old, new, premium in cases:
@@ -397,11 +403,11 @@ class RouteLifecycleTests(unittest.TestCase):
             self.watcher._cycle_lock.release()
         self.assertEqual(self.store.snapshot(), before)
 
-    def test_feature_detection_covers_premium_networks_cmi_and_cug(self):
+    def test_feature_detection_covers_premium_networks_and_cmi(self):
         features = route_features(
-            ["AS917", "AS4809", "AS23764", "AS9929", "AS58807", "AS58453", "AS10099"]
+            ["AS917", "AS4809", "AS23764", "AS9929", "AS10099", "AS58807", "AS58453"]
         )
-        for label in ("CN2", "CTG", "9929", "CMIN2", "CMI", "CUG"):
+        for label in ("CN2", "CTG", "9929", "10099", "CMIN2", "CMI"):
             self.assertIn(label, features)
 
 

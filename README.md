@@ -233,9 +233,9 @@ Misaka Route Watch 与库存扫描完全独立，默认每 1800 秒使用
 首次成功只建立静默 baseline；新路径必须连续两轮相同才确认，单次 candidate 恢复
 baseline 会被丢弃。2026-10-18 起，只有变化前或变化后的路径经过三网精品网络（半程、全程
 都算）时，确认的变化才发 Telegram：电信 CN2（AS4809，GIA 和 GT 都算）、电信 CTG
-（AS23764）、联通 9929（AS9929）、移动 CMIN2（AS58807）。精品网络不变、只是中间 transit
-改变也会通知；消息里的“精品线路”一行显示变化前后的精品网络。只经过普通线路的变化照常更新
-baseline，只写一条 INFO 日志；移动 CMI（AS58453）和联通 CUG（AS10099）按普通线路处理。
+（AS23764）、联通 9929（AS9929）、联通 10099（AS10099，CUG）、移动 CMIN2（AS58807）。精品
+网络不变、只是中间 transit 改变也会通知；消息里的“精品线路”一行显示变化前后的精品网络。只
+经过普通线路的变化照常更新 baseline，只写一条 INFO 日志；移动 CMI（AS58453）按普通线路处理。
 CN2 GIA 和 CN2 GT 的 ASN 路径相同，不区分，两者互换也不会被识别为变化。精品网络清单在
 `route_watch.PREMIUM_NETWORKS`。LG、目标可达性、schema 或 ASN 覆盖率失败时保留旧 baseline，并把已取得
 的 raw attempt 仅作为诊断状态保存。Route scheduler 自带防重入和失败退避，不阻塞库存线程。

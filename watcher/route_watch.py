@@ -32,6 +32,7 @@ PREMIUM_NETWORKS = {
     "AS4809": "CN2",
     "AS23764": "CTG",
     "AS9929": "9929",
+    "AS10099": "10099",
     "AS58807": "CMIN2",
 }
 LOG = logging.getLogger(__name__)
@@ -813,7 +814,6 @@ def route_features(path: Iterable[str]) -> List[str]:
     values = set(path)
     mapping = list(PREMIUM_NETWORKS.items()) + [
         ("AS58453", "CMI"),
-        ("AS10099", "CUG"),
         ("AS4134", "China Telecom"),
         ("AS4837", "China Unicom"),
         ("AS4808", "China Unicom"),
