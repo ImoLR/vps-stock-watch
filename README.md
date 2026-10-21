@@ -81,10 +81,12 @@ Washington 的 `ISP-XS` 是 `isp-xs`，Seattle 的 `ISP-XS` 是 `isp-seattle-xs`
 `stock_count` 均为 0。以上是点时快照，会随实时目录和库存变化。
 
 Blossom 的 Telegram policy 使用 catalog 的机器分类 `plans[].family`，而不是商品名称或
-SKU。`isp`（ISP Line）和 `metal`（Bare metal）仍完整抓取、比较并写入 state，也继续
-计入 `/status`，但所有变化都标记为静默，不发送 Telegram；其他 family（包括独立的
-residential inventory）保持通知。需要恢复某一系列时，只需调整
-`BlossomProvider.SILENT_NOTIFICATION_FAMILIES`。
+SKU。`metal`（Bare metal）仍完整抓取、比较并写入 state，也继续计入 `/status`，但所有
+变化都标记为静默，不发送 Telegram；`isp`（ISP Line）自 2026-10-21 起恢复通知（新品、
+补货、售罄、库存数字变化等全部发送，试行观察），其他 family（包括独立的 residential
+inventory）同样保持通知。是否静默只按 `family` 判断，不读取旧 state 里保存的
+`notification_suppressed`，所以旧快照中 ISP 商品的下架也会通知。需要再静默或恢复某一
+系列时，只需调整 `BlossomProvider.SILENT_NOTIFICATION_FAMILIES`。
 
 ### BOILCLOUD
 
@@ -366,7 +368,7 @@ Provider 数量、各 Provider 最近检查/成功时间、商品数、有货数
 
 商品的正常/隐藏属性来自 `metadata.discovery`，不按名称猜测：catalog/API/官网导航发现的
 商品标记为“正常库存”，`extra_product_urls`、`extra_pids` 等补充入口标记为“隐藏库存”。
-隐藏库存统一放在正常库存之后。Blossom 的 ISP/Metal `notification_suppressed` 只控制主动
+隐藏库存统一放在正常库存之后。Blossom 的 Metal `notification_suppressed` 只控制主动
 通知，不影响 `/stock`，只要当前有货仍按正常库存显示。FACHOST Product 22 因来自
 `extra_product_urls`，当前有货时显示为隐藏库存。
 

@@ -57,11 +57,14 @@ class BlossomProviderTests(unittest.TestCase):
         self.assertFalse(residential.available)
         self.assertIsNone(residential.price)
         self.assertEqual(residential.specs["ram"], "3 GB")
-        self.assertTrue(washington.metadata["notification_suppressed"])
+        self.assertFalse(washington.metadata["notification_suppressed"])
         self.assertTrue(products[2].metadata["notification_suppressed"])
         self.assertFalse(residential.metadata["notification_suppressed"])
-        self.assertFalse(
+        self.assertTrue(
             self.provider.should_notify(Change(ChangeType.RESTOCK, washington))
+        )
+        self.assertFalse(
+            self.provider.should_notify(Change(ChangeType.RESTOCK, products[2]))
         )
         self.assertTrue(
             self.provider.should_notify(Change(ChangeType.RESTOCK, residential))

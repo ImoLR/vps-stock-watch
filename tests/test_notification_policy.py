@@ -74,29 +74,44 @@ class NotificationPolicyTests(unittest.TestCase):
         self.assertEqual(app.telegram.sent, [])
         return app
 
-    def test_isp_restock_is_silent(self):
-        self.assert_silent(
+    def assert_one_sent(self, old, new, text):
+        app = self.exercise(old, new)
+        self.assertEqual(len(app.telegram.sent), 1)
+        self.assertIn(text, app.telegram.sent[0][0])
+
+    def test_isp_restock_notifies(self):
+        self.assert_one_sent(
             [product("isp", stock=0, available=False)],
             [product("isp", stock=1, available=True)],
+            "Blossom Host 补货",
         )
 
-    def test_isp_sold_out_is_silent(self):
-        self.assert_silent(
+    def test_isp_sold_out_notifies(self):
+        self.assert_one_sent(
             [product("isp", stock=1, available=True)],
             [product("isp", stock=0, available=False)],
+            "Blossom Host",
         )
 
-    def test_isp_numeric_stock_change_is_silent(self):
-        self.assert_silent(
+    def test_isp_numeric_stock_change_notifies(self):
+        self.assert_one_sent(
             [product("isp", stock=5, available=True)],
             [product("isp", stock=4, available=True)],
+            "Blossom Host",
         )
 
-    def test_isp_new_sku_is_silent(self):
-        self.assert_silent(
+    def test_isp_new_sku_notifies(self):
+        self.assert_one_sent(
             [product("isp")],
             [product("isp"), product("isp", product_id="future-isp")],
+            "Blossom Host 发现新品",
         )
+
+    def test_isp_removal_from_snapshot_written_while_muted_notifies(self):
+        # State saved before ISP was unmuted still carries the old flag.
+        old = product("isp", product_id="old-isp")
+        old.metadata["notification_suppressed"] = True
+        self.assert_one_sent([product("isp"), old], [product("isp")], "Blossom Host")
 
     def test_metal_restock_is_silent(self):
         self.assert_silent(
@@ -124,9 +139,9 @@ class NotificationPolicyTests(unittest.TestCase):
 
     def test_silent_products_still_update_state_and_status_totals(self):
         app = self.assert_silent(
-            [product("isp"), product("metal", product_id="metal-1")],
+            [product("metal"), product("metal", product_id="metal-1")],
             [
-                product("isp", stock=1, available=True),
+                product("metal", stock=1, available=True),
                 product("metal", product_id="metal-1", stock=2, available=True),
             ],
         )
@@ -145,13 +160,14 @@ class NotificationPolicyTests(unittest.TestCase):
         self.assertEqual(len(app.telegram.sent), 1)
         self.assertIn("Blossom Host 补货", app.telegram.sent[0][0])
 
-    def test_all_change_types_are_silent_for_isp_and_metal(self):
+    def test_all_change_types_are_silent_for_metal_only(self):
         provider = BlossomProvider({"name": "blossom", "type": "blossom"})
-        for family in ("isp", "metal"):
+        for family, expected in (("metal", False), ("isp", True)):
             for change_type in ChangeType:
                 with self.subTest(family=family, change_type=change_type):
-                    self.assertFalse(
-                        provider.should_notify(Change(change_type, product(family)))
+                    self.assertEqual(
+                        provider.should_notify(Change(change_type, product(family))),
+                        expected,
                     )
 
     def test_nexkr_and_dmit_remain_notifiable(self):

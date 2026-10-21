@@ -11,7 +11,7 @@ from .base import BaseProvider, ParseError
 class BlossomProvider(BaseProvider):
     CATALOG_URL = "https://blossomhost.us/api/catalog"
     BUY_URL = "https://blossomhost.us/#/buy/"
-    SILENT_NOTIFICATION_FAMILIES = frozenset(("isp", "metal"))
+    SILENT_NOTIFICATION_FAMILIES = frozenset(("metal",))
 
     def fetch_products(self) -> List[Product]:
         payload = self.get_json(str(self.config.get("catalog_url", self.CATALOG_URL)))
@@ -91,11 +91,12 @@ class BlossomProvider(BaseProvider):
         return products
 
     def should_notify(self, change: Change) -> bool:
-        # `family` is Blossom's stable machine category. Checking it here as
-        # well as storing the generic metadata flag also protects REMOVED
-        # changes loaded from snapshots written before that flag existed.
-        if self._silent_family(change.product.metadata.get("family")):
-            return False
+        # `family` is Blossom's stable machine category. Deciding by it rather
+        # than the stored metadata flag keeps REMOVED changes correct for
+        # snapshots written before that flag existed or under an older policy.
+        family = change.product.metadata.get("family")
+        if family is not None:
+            return not self._silent_family(family)
         return super().should_notify(change)
 
     @classmethod

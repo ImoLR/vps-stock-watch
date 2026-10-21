@@ -284,7 +284,7 @@ class StockQueryTests(unittest.TestCase):
         item["metadata"]["discovery"]["source"] = "homepage_navigation"
         self.assertFalse(is_hidden_inventory(item))
 
-    def test_blossom_silent_isp_and_metal_are_still_visible_as_normal(self):
+    def test_blossom_isp_and_silent_metal_are_still_visible_as_normal(self):
         isp = product(
             "blossom",
             "isp-xs",
@@ -312,7 +312,7 @@ class StockQueryTests(unittest.TestCase):
         self.assertIn("【Bare metal — dedicated physical servers】", rendered)
         self.assertNotIn("🕵️ 隐藏库存", rendered)
         provider = next(item for item in self.app.providers if item.name == "blossom")
-        self.assertFalse(provider.should_notify(Change(ChangeType.STOCK, isp, old=isp)))
+        self.assertTrue(provider.should_notify(Change(ChangeType.STOCK, isp, old=isp)))
         self.assertFalse(provider.should_notify(Change(ChangeType.STOCK, metal, old=metal)))
 
     def test_available_products_sort_normal_inventory_before_hidden(self):
