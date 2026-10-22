@@ -82,11 +82,12 @@ Washington 的 `ISP-XS` 是 `isp-xs`，Seattle 的 `ISP-XS` 是 `isp-seattle-xs`
 
 Blossom 的 Telegram policy 使用 catalog 的机器分类 `plans[].family`，而不是商品名称或
 SKU。`metal`（Bare metal）仍完整抓取、比较并写入 state，也继续计入 `/status`，但所有
-变化都标记为静默，不发送 Telegram；`isp`（ISP Line）自 2026-10-21 起恢复通知（新品、
-补货、售罄、库存数字变化等全部发送，试行观察），其他 family（包括独立的 residential
-inventory）同样保持通知。是否静默只按 `family` 判断，不读取旧 state 里保存的
-`notification_suppressed`，所以旧快照中 ISP 商品的下架也会通知。需要再静默或恢复某一
-系列时，只需调整 `BlossomProvider.SILENT_NOTIFICATION_FAMILIES`。
+变化都标记为静默，不发送 Telegram。其余 family（`isp` ISP Line 及独立的 residential
+inventory）自 2026-10-22 起只在新品（NEW）和下架（REMOVED）时通知；补货、售罄、库存
+数字、价格和名称变化照常写入 state，但不发送（`BlossomProvider.NOTIFY_CHANGE_TYPES`）。
+是否静默只按 `family` 判断，不读取旧 state 里保存的 `notification_suppressed`，所以旧
+快照中 ISP 商品的下架也会通知。需要再静默或恢复某一系列时，只需调整
+`BlossomProvider.SILENT_NOTIFICATION_FAMILIES`。
 
 ### BOILCLOUD
 

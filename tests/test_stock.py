@@ -312,8 +312,9 @@ class StockQueryTests(unittest.TestCase):
         self.assertIn("【Bare metal — dedicated physical servers】", rendered)
         self.assertNotIn("🕵️ 隐藏库存", rendered)
         provider = next(item for item in self.app.providers if item.name == "blossom")
-        self.assertTrue(provider.should_notify(Change(ChangeType.STOCK, isp, old=isp)))
-        self.assertFalse(provider.should_notify(Change(ChangeType.STOCK, metal, old=metal)))
+        self.assertTrue(provider.should_notify(Change(ChangeType.NEW, isp)))
+        self.assertFalse(provider.should_notify(Change(ChangeType.STOCK, isp, old=isp)))
+        self.assertFalse(provider.should_notify(Change(ChangeType.NEW, metal)))
 
     def test_available_products_sort_normal_inventory_before_hidden(self):
         self.save_products(

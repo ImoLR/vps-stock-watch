@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-from ..models import Change, Product
+from ..models import Change, ChangeType, Product
 from .base import BaseProvider, ParseError
 
 
@@ -12,6 +12,9 @@ class BlossomProvider(BaseProvider):
     CATALOG_URL = "https://blossomhost.us/api/catalog"
     BUY_URL = "https://blossomhost.us/#/buy/"
     SILENT_NOTIFICATION_FAMILIES = frozenset(("metal",))
+    # Only new and removed plans notify. Restock, sold-out, stock-count, price
+    # and name changes are still recorded in state, just not sent.
+    NOTIFY_CHANGE_TYPES = frozenset((ChangeType.NEW, ChangeType.REMOVED))
 
     def fetch_products(self) -> List[Product]:
         payload = self.get_json(str(self.config.get("catalog_url", self.CATALOG_URL)))
@@ -91,6 +94,8 @@ class BlossomProvider(BaseProvider):
         return products
 
     def should_notify(self, change: Change) -> bool:
+        if change.type not in self.NOTIFY_CHANGE_TYPES:
+            return False
         # `family` is Blossom's stable machine category. Deciding by it rather
         # than the stored metadata flag keeps REMOVED changes correct for
         # snapshots written before that flag existed or under an older policy.

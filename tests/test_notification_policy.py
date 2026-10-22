@@ -79,25 +79,28 @@ class NotificationPolicyTests(unittest.TestCase):
         self.assertEqual(len(app.telegram.sent), 1)
         self.assertIn(text, app.telegram.sent[0][0])
 
-    def test_isp_restock_notifies(self):
-        self.assert_one_sent(
+    def test_isp_restock_is_silent(self):
+        self.assert_silent(
             [product("isp", stock=0, available=False)],
             [product("isp", stock=1, available=True)],
-            "Blossom Host 补货",
         )
 
-    def test_isp_sold_out_notifies(self):
-        self.assert_one_sent(
+    def test_isp_sold_out_is_silent(self):
+        self.assert_silent(
             [product("isp", stock=1, available=True)],
             [product("isp", stock=0, available=False)],
-            "Blossom Host",
         )
 
-    def test_isp_numeric_stock_change_notifies(self):
-        self.assert_one_sent(
+    def test_isp_numeric_stock_change_is_silent(self):
+        self.assert_silent(
             [product("isp", stock=5, available=True)],
             [product("isp", stock=4, available=True)],
-            "Blossom Host",
+        )
+
+    def test_isp_price_change_is_silent(self):
+        self.assert_silent(
+            [product("isp", price="$10 USD")],
+            [product("isp", price="$12 USD")],
         )
 
     def test_isp_new_sku_notifies(self):
@@ -152,18 +155,27 @@ class NotificationPolicyTests(unittest.TestCase):
         self.assertIn("商品数量：2", status)
         self.assertIn("当前有货：2", status)
 
-    def test_other_blossom_family_still_notifies(self):
-        app = self.exercise(
+    def test_other_blossom_family_restock_is_silent(self):
+        self.assert_silent(
             [product("residential", stock=0, available=False)],
             [product("residential", stock=1, available=True)],
         )
-        self.assertEqual(len(app.telegram.sent), 1)
-        self.assertIn("Blossom Host 补货", app.telegram.sent[0][0])
 
-    def test_all_change_types_are_silent_for_metal_only(self):
+    def test_other_blossom_family_new_offer_notifies(self):
+        self.assert_one_sent(
+            [product("residential")],
+            [product("residential"), product("residential", product_id="offer-2")],
+            "Blossom Host 发现新品",
+        )
+
+    def test_only_new_and_removed_notify_and_metal_never(self):
         provider = BlossomProvider({"name": "blossom", "type": "blossom"})
-        for family, expected in (("metal", False), ("isp", True)):
+        for family in ("metal", "isp", "residential"):
             for change_type in ChangeType:
+                expected = family != "metal" and change_type in (
+                    ChangeType.NEW,
+                    ChangeType.REMOVED,
+                )
                 with self.subTest(family=family, change_type=change_type):
                     self.assertEqual(
                         provider.should_notify(Change(change_type, product(family))),

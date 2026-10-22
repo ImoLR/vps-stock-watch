@@ -60,13 +60,13 @@ class BlossomProviderTests(unittest.TestCase):
         self.assertFalse(washington.metadata["notification_suppressed"])
         self.assertTrue(products[2].metadata["notification_suppressed"])
         self.assertFalse(residential.metadata["notification_suppressed"])
-        self.assertTrue(
+        self.assertTrue(self.provider.should_notify(Change(ChangeType.NEW, washington)))
+        self.assertFalse(
             self.provider.should_notify(Change(ChangeType.RESTOCK, washington))
         )
+        self.assertFalse(self.provider.should_notify(Change(ChangeType.NEW, products[2])))
+        self.assertTrue(self.provider.should_notify(Change(ChangeType.NEW, residential)))
         self.assertFalse(
-            self.provider.should_notify(Change(ChangeType.RESTOCK, products[2]))
-        )
-        self.assertTrue(
             self.provider.should_notify(Change(ChangeType.RESTOCK, residential))
         )
 
