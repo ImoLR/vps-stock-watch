@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,12 @@ from watcher.models import Change, ChangeType, Product
 from watcher.providers import build_provider
 from watcher.providers.base import FetchError, ParseError
 from watcher.providers.vmsilo import FetchedDocument, VmsiloProvider
-from watcher.telegram import format_status, format_stock_menu, format_stock_provider
+from watcher.telegram import (
+    format_change,
+    format_status,
+    format_stock_menu,
+    format_stock_provider,
+)
 
 
 def category_html(categories, products, current="gid=1", layout=True):
@@ -65,6 +71,53 @@ def category_html(categories, products, current="gid=1", layout=True):
       <div class="bv-plan-grid">%s</div>
     </div></body></html>
     """ % (tabs, head if layout else "", "".join(cards))
+
+
+def order_page_html(variants, token="tok"):
+    """Order page with qqdlproxy's embedded config; variants: family -> spec."""
+    choices, configs = {}, {}
+    for index, (family, spec) in enumerate(variants.items()):
+        base = 100 + index * 10
+        choices[str(900 + index)] = {"family": family, "label": spec["label"]}
+        fields = {}
+        if spec.get("durations"):
+            fields[str(base)] = {
+                "kind": "duration",
+                "choices": {
+                    str(base * 10 + n): text for n, text in enumerate(spec["durations"])
+                },
+            }
+        if spec.get("country_codes"):
+            fields[str(base + 1)] = {
+                "kind": "country", "choices": [], "countryCodes": {"1": "US"}
+            }
+        else:
+            fields[str(base + 1)] = {"kind": "country", "choices": {"1": "US"}}
+        fields[str(base + 2)] = {"kind": "city", "choices": {"2": "Random"}}
+        fields[str(base + 3)] = {"kind": "quantity", "unit": spec.get("unit", "个")}
+        configs[family] = {
+            "purchasePaused": spec.get("paused", False),
+            "fields": [] if spec.get("paused") else fields,
+        }
+    config = {
+        "configure": {},
+        "category": {"selectorId": 50, "choices": choices, "variants": configs},
+    }
+    return """
+    <html><body><form id="frmConfigureProduct">
+      <input type="hidden" name="token" value="%s" />
+      <input type="hidden" name="i" value="0" />
+    </form>
+    <script type="application/json" id="qqdl-order-config">%s</script>
+    </body></html>
+    """ % (token, json.dumps(config))
+
+
+def total_html(amount):
+    return (
+        '<div class="total-due-today"><span class="amt">¥%s CNY</span>'
+        "<span>Total Due Today</span></div>" % amount
+    )
 
 
 def vmsilo_product(
@@ -279,6 +332,108 @@ class VmsiloProviderTests(unittest.TestCase):
         ):
             with self.assertRaises(FetchError):
                 self.provider.fetch_products()
+
+    def order_scan(self, order_html, prices, calls):
+        """Run fetch_products with one ¥0.00 card whose order page is order_html."""
+        alpha = category_html(
+            self.categories, [{"slug": "plan-a"}], "gid=1"
+        )
+        beta = category_html(
+            self.categories,
+            [{"slug": "proxy", "name": "Proxy", "price": "0.00", "cycle": "One-time"}],
+            "gid=2",
+        )
+        store = self.provider.STORE_URL
+        order_url = self.base + "store/beta/proxy?language=chinese"
+        documents = {
+            store: self.document(store, "store/alpha", alpha),
+            self.base + "cart.php?gid=2": self.document(
+                self.base + "cart.php?gid=2", "store/beta", beta
+            ),
+            order_url: self.document(order_url, "cart.php?a=confproduct&i=0", order_html),
+        }
+
+        def fetch(url, session=None, data=None):
+            calls.append((url, session, data))
+            if data is None:
+                return documents[url]
+            self.assertIsNot(session, self.provider.session)
+            key = next(
+                (value for name, value in data.items() if value in prices), "flat"
+            )
+            return self.document(url, "cart.php", total_html(prices[key]))
+
+        with patch.object(self.provider, "_fetch_document", side_effect=fetch):
+            return {item.product_id: item for item in self.provider.fetch_products()}
+
+    def test_zero_price_card_is_priced_from_order_page(self):
+        html = order_page_html(
+            {
+                "plain": {"label": "普通住宅 IP", "durations": ["7 天", "30 天"]},
+                "flow": {"label": "不过期流量", "unit": "GB", "country_codes": True},
+                "bandwidth": {"label": "不限流量带宽", "paused": True},
+            }
+        )
+        calls = []
+        by_id = self.order_scan(
+            html, {"1000": "45.00", "1001": "90.00", "flat": "30.00"}, calls
+        )
+        proxy = by_id["proxy"]
+        self.assertEqual(
+            proxy.pricing,
+            {
+                "普通住宅 IP · 7 天": "¥45.00",
+                "普通住宅 IP · 30 天": "¥90.00",
+                "不过期流量 · 1 GB": "¥30.00",
+            },
+        )
+        self.assertEqual(list(proxy.pricing), ["普通住宅 IP · 7 天", "普通住宅 IP · 30 天", "不过期流量 · 1 GB"])
+        self.assertEqual(proxy.price, "¥30.00")
+        self.assertTrue(proxy.available)
+        self.assertEqual(proxy.metadata["order_page"]["paused"], ["不限流量带宽"])
+        self.assertEqual(by_id["plan-a"].pricing, {})
+        posts = [data for _, _, data in calls if data is not None]
+        self.assertEqual(len(posts), 3)
+        self.assertEqual(posts[0]["configoption[50]"], "900")
+        self.assertEqual(posts[0]["configoption[103]"], "1")
+        self.assertEqual(posts[0]["token"], "tok")
+        self.assertEqual(self.provider.last_scan_stats["order_page_products"], 1)
+
+    def test_order_pricing_is_cached_until_refresh(self):
+        html = order_page_html({"plain": {"label": "A", "durations": ["7 天"]}})
+        now = [1000.0]
+        self.provider._clock = lambda: now[0]
+        calls = []
+        self.order_scan(html, {"1000": "45.00"}, calls)
+        first = len(calls)
+        by_id = self.order_scan(html, {"1000": "45.00"}, calls)
+        self.assertEqual(len(calls) - first, 2)
+        self.assertEqual(by_id["proxy"].price, "¥45.00")
+        now[0] += 601
+        by_id = self.order_scan(html, {"1000": "50.00"}, calls)
+        self.assertEqual(by_id["proxy"].pricing, {"A · 7 天": "¥50.00"})
+
+    def test_all_paused_order_page_marks_product_unavailable(self):
+        html = order_page_html({"bandwidth": {"label": "B", "paused": True}})
+        by_id = self.order_scan(html, {}, [])
+        self.assertFalse(by_id["proxy"].available)
+        self.assertEqual(by_id["proxy"].price, "¥0.00")
+        self.assertEqual(by_id["proxy"].pricing, {})
+
+    def test_unrecognized_order_page_aborts_catalog(self):
+        with self.assertRaises(ParseError):
+            self.order_scan("<html><body>maintenance</body></html>", {}, [])
+
+    def test_order_tiers_appear_in_new_and_price_alerts_in_site_order(self):
+        tiers = {"A · 7 天": "¥45.00", "A · 30 天": "¥90.00", "A · 180 天": "¥450.00"}
+        new = vmsilo_product(price="¥45.00")
+        new.pricing = dict(tiers)
+        text = format_change(Change(ChangeType.NEW, new), [])
+        self.assertLess(text.index("A · 7 天：¥45.00"), text.index("A · 180 天：¥450.00"))
+        old = vmsilo_product(price="¥0.00")
+        text = format_change(Change(ChangeType.PRICE, new, old, ["price", "pricing"]), [])
+        self.assertIn("价格变化：¥0.00 → ¥45.00", text)
+        self.assertLess(text.index("A · 30 天价格"), text.index("A · 180 天价格"))
 
     def test_provider_factory_builds_vmsilo(self):
         built = build_provider({"name": "vmsilo", "type": "vmsilo"})

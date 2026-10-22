@@ -612,17 +612,23 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
                 % (_shown(old.billing_cycle), _shown(product.billing_cycle))
             )
         if "pricing" in change.fields:
-            cycles = sorted(set(old.pricing) | set(product.pricing))
+            # Keep the provider's tier order (7 / 30 / 90 days), not alphabetical.
+            cycles = list(product.pricing) + [
+                cycle for cycle in old.pricing if cycle not in product.pricing
+            ]
             for cycle in cycles:
                 if old.pricing.get(cycle) != product.pricing.get(cycle):
                     lines.append(
                         "%s价格：%s → %s"
                         % (
-                            _cycle_label(cycle),
+                            html.escape(_cycle_label(cycle)),
                             _shown(old.pricing.get(cycle)),
                             _shown(product.pricing.get(cycle)),
                         )
                     )
+    if change.type == ChangeType.NEW and product.pricing:
+        for cycle, price in product.pricing.items():
+            lines.append("%s：%s" % (html.escape(_cycle_label(cycle)), _shown(price)))
     if change.type == ChangeType.PROMOTION and old:
         for field, label in (
             ("original_price", "原价"),

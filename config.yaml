@@ -166,6 +166,7 @@ providers:
     minimum_categories: 2
     max_categories: 100
     max_backoff_seconds: 1800
+    order_page_refresh_seconds: 600
 
   - name: misaka
     type: misaka

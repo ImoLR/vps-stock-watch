@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -50,6 +51,9 @@ class VmsiloProvider(BaseProvider):
         # Sold-out cards may drop the order link; remember pid -> slug so the
         # stable slug ID survives until the product is buyable again.
         self._slug_by_pid: Dict[str, str] = {}
+        # product_id -> (monotonic fetch time, card price, order-page result).
+        self._order_cache: Dict[str, Tuple[float, Optional[str], Dict[str, Any]]] = {}
+        self._clock = time.monotonic
 
     def fetch_products(self) -> List[Product]:
         started = time.monotonic()
@@ -134,6 +138,7 @@ class VmsiloProvider(BaseProvider):
             raise ParseError("VMSILO discovery produced no complete category pages")
 
         products = [products_by_id[key] for key in sorted(products_by_id)]
+        order_pages = self._apply_order_pricing(products)
         duration = time.monotonic() - started
         self.last_scan_stats = {
             "system": "WHMCS bestvm theme",
@@ -154,6 +159,7 @@ class VmsiloProvider(BaseProvider):
                 for item in products
             ),
             "duplicate_products": duplicate_products,
+            "order_page_products": order_pages,
             "requests": self._scan_request_count,
             "duration_seconds": round(duration, 3),
             "browser_required": False,
@@ -319,13 +325,210 @@ class VmsiloProvider(BaseProvider):
             },
         )
 
-    def _fetch_document(self, url: str) -> FetchedDocument:
+    def _apply_order_pricing(self, products: List[Product]) -> int:
+        """Replace ¥0.00 card prices with the prices the order page computes.
+
+        Some VMSILO products (the socks5 proxies) show only a ¥0.00 base price
+        on the category card; the real price depends on subtype and duration
+        and is calculated by the WHMCS cart. Results are cached for
+        ``order_page_refresh_seconds`` so each scan does not re-price them.
+        """
+        refresh = max(0, int(self.config.get("order_page_refresh_seconds", 600)))
+        priced = 0
+        for product in products:
+            if not self._needs_order_page(product):
+                continue
+            cached = self._order_cache.get(product.product_id)
+            now = self._clock()
+            if (
+                cached is not None
+                and cached[1] == product.price
+                and now - cached[0] < refresh
+            ):
+                order = cached[2]
+            else:
+                order = self._fetch_order_pricing(product)
+                self._order_cache[product.product_id] = (now, product.price, order)
+            product.pricing = dict(order["pricing"])
+            if order["lowest"]:
+                product.price = order["lowest"]
+            if not order["pricing"]:
+                product.available = False
+            product.metadata["order_page"] = {
+                "paused": list(order["paused"]),
+                "price_basis": "1 unit, first country, random city",
+            }
+            product.metadata["price_source"] = "order_page.calctotal"
+            priced += 1
+        return priced
+
+    @staticmethod
+    def _needs_order_page(product: Product) -> bool:
+        match = re.search(r"[0-9][0-9,]*(?:\.[0-9]+)?", product.price or "")
+        if not match or float(match.group(0).replace(",", "")) != 0:
+            return False
+        return bool(
+            product.metadata.get("product_slug")
+            and product.url
+            and urlparse(product.url).path.rstrip("/").endswith(
+                "/" + product.metadata["product_slug"]
+            )
+        )
+
+    def _fetch_order_pricing(self, product: Product) -> Dict[str, Any]:
+        # A fresh session per product: opening /store/<cat>/<slug> puts the
+        # product into the session cart, so a shared session would pile up items.
+        session = requests.Session()
+        session.headers.update(self.session.headers)
+        language = str(self.config.get("order_page_language", "chinese"))
+        page = self._fetch_document(
+            "%s?language=%s" % (product.url, language), session=session
+        )
+        soup = BeautifulSoup(page.text, "lxml")
+        form = soup.select_one("form#frmConfigureProduct")
+        script = soup.select_one("script#qqdl-order-config")
+        if form is None or script is None:
+            raise ParseError(
+                "VMSILO product %s has no recognized order page" % product.product_id
+            )
+        token = form.select_one('input[name="token"]')
+        index = form.select_one('input[name="i"]')
+        try:
+            config = json.loads(script.string or "")
+        except ValueError:
+            raise ParseError(
+                "VMSILO product %s has invalid order config" % product.product_id
+            ) from None
+        base = {
+            "token": str(token.get("value") or "") if token else "",
+            "configure": "true",
+            "i": str(index.get("value") or "0") if index else "0",
+            "billingcycle": "onetime",
+        }
+        calc_url = urljoin(page.url, "cart.php?a=confproduct&calctotal=true")
+        pricing: Dict[str, str] = {}
+        amounts: Dict[str, float] = {}
+        paused: List[str] = []
+        for selector, choice, label, variant in self._order_variants(config, product):
+            if variant.get("purchasePaused"):
+                paused.append(label)
+                continue
+            data = dict(base)
+            if selector:
+                data["configoption[%s]" % selector] = choice
+            durations: List[Tuple[str, str]] = []
+            duration_name = ""
+            unit = ""
+            for field_id, field in (variant.get("fields") or {}).items():
+                kind = field.get("kind")
+                choices = field.get("choices") or {}
+                name = "configoption[%s]" % field_id
+                if kind == "quantity":
+                    data[name] = "1"
+                    unit = str(field.get("unit") or "")
+                elif kind == "duration":
+                    duration_name = name
+                    durations = [(str(key), str(value)) for key, value in choices.items()]
+                elif kind in ("country", "city"):
+                    # Dynamic proxies leave ``choices`` empty and list countries
+                    # in ``countryCodes`` and the page's own <select>.
+                    choices = choices or field.get("countryCodes") or {}
+                    option = soup.select_one('select[name="%s"] option[value]' % name)
+                    first = next(iter(choices), None) or (
+                        option.get("value") if option else None
+                    )
+                    if not first:
+                        raise ParseError(
+                            "VMSILO product %s has no %s choices"
+                            % (product.product_id, kind)
+                        )
+                    data[name] = str(first)
+                elif kind != "subtype":
+                    raise ParseError(
+                        "VMSILO product %s has unknown order field kind %s"
+                        % (product.product_id, kind)
+                    )
+            if durations:
+                tiers = [(value, "%s · %s" % (label, text)) for value, text in durations]
+            else:
+                tiers = [(None, "%s · 1 %s" % (label, unit) if unit else label)]
+            for value, tier in tiers:
+                if value is not None:
+                    data[duration_name] = value
+                price, amount = self._order_total(calc_url, data, session, product)
+                pricing[tier] = price
+                amounts[tier] = amount
+        if not pricing and not paused:
+            raise ParseError(
+                "VMSILO product %s order page produced no prices" % product.product_id
+            )
+        lowest = min(amounts, key=amounts.get) if amounts else None
+        return {
+            "pricing": pricing,
+            "lowest": pricing[lowest] if lowest else None,
+            "paused": paused,
+        }
+
+    @staticmethod
+    def _order_variants(
+        config: Dict[str, Any], product: Product
+    ) -> List[Tuple[Optional[str], Optional[str], str, Dict[str, Any]]]:
+        category = config.get("category") or {}
+        selector = category.get("selectorId")
+        choices = category.get("choices") or {}
+        variants = category.get("variants") or {}
+        if selector and choices:
+            result = []
+            for choice_id, choice in choices.items():
+                variant = variants.get(choice.get("family"))
+                if not isinstance(variant, dict):
+                    raise ParseError(
+                        "VMSILO product %s order subtype %s has no configuration"
+                        % (product.product_id, choice_id)
+                    )
+                label = str(choice.get("label") or variant.get("title") or choice_id)
+                result.append((str(selector), str(choice_id), label, variant))
+            return result
+        configure = config.get("configure")
+        if not isinstance(configure, dict):
+            raise ParseError(
+                "VMSILO product %s order config has no variants" % product.product_id
+            )
+        return [(None, None, product.name, configure)]
+
+    def _order_total(
+        self,
+        url: str,
+        data: Dict[str, str],
+        session: requests.Session,
+        product: Product,
+    ) -> Tuple[str, float]:
+        document = self._fetch_document(url, session=session, data=data)
+        node = BeautifulSoup(document.text, "lxml").select_one(".total-due-today .amt")
+        match = self.PRICE.search(self._text(node) or "")
+        if not match:
+            raise ParseError(
+                "VMSILO product %s order total has no price" % product.product_id
+            )
+        amount = float(match.group(2).replace(",", ""))
+        return "%s%s" % (match.group(1) or "", match.group(2)), amount
+
+    def _fetch_document(
+        self,
+        url: str,
+        session: Optional[requests.Session] = None,
+        data: Optional[Dict[str, str]] = None,
+    ) -> FetchedDocument:
+        session = session or self.session
         attempts = max(1, int(self.config.get("retry_attempts", 2)))
         backoff = max(0.0, float(self.config.get("retry_backoff_seconds", 1.0)))
         for attempt in range(attempts):
             self._scan_request_count += 1
             try:
-                response = self.session.get(url, timeout=self.timeout)
+                if data is None:
+                    response = session.get(url, timeout=self.timeout)
+                else:
+                    response = session.post(url, data=data, timeout=self.timeout)
             except requests.RequestException as exc:
                 if attempt + 1 < attempts:
                     time.sleep(backoff * (2 ** attempt))
