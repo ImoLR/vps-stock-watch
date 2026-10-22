@@ -1051,6 +1051,7 @@ def _is_stale(
 def _provider_name(value: str) -> str:
     return {
         "nexkr": "NexKr",
+        "nnb": "NewNB",
         "dmit": "DMIT",
         "blossom": "Blossom Host",
         "boilcloud": "BOILCLOUD",
