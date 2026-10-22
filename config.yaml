@@ -1,5 +1,6 @@
 poll_interval_seconds: 60
 state_path: data/state.json
+outage_alert_after_seconds: 3600
 
 route_watch:
   enabled: true
@@ -106,7 +107,7 @@ providers:
     base_url: https://cloud.boil.network/
     store_url: https://cloud.boil.network/index.php?rp=/store
     sitemap_url: https://cloud.boil.network/sitemap.xml
-    interval_seconds: 120
+    interval_seconds: 600
     timeout_seconds: 30
     retry_attempts: 2
     retry_backoff_seconds: 1
@@ -117,7 +118,7 @@ providers:
     type: fachost
     enabled: true
     base_url: https://fachost.cloud/
-    interval_seconds: 60
+    interval_seconds: 300
     timeout_seconds: 25
     retry_attempts: 2
     retry_backoff_seconds: 1
@@ -137,7 +138,7 @@ providers:
     # prices and direct order links in CNY instead of the default HKD session.
     preferred_currency_id: 2
     preferred_currency_code: CNY
-    interval_seconds: 120
+    interval_seconds: 600
     timeout_seconds: 30
     retry_attempts: 2
     retry_backoff_seconds: 1
@@ -166,7 +167,7 @@ providers:
     minimum_categories: 2
     max_categories: 100
     max_backoff_seconds: 1800
-    order_page_refresh_seconds: 600
+    order_page_refresh_seconds: 1800
 
   - name: misaka
     type: misaka
@@ -181,7 +182,7 @@ providers:
       HK: Hong Kong
       TW: Taiwan
       JP: Japan
-    interval_seconds: 60
+    interval_seconds: 1800
     timeout_seconds: 20
     retry_attempts: 2
     retry_backoff_seconds: 0.5

@@ -108,7 +108,7 @@ BOILCLOUD 当前使用 WHMCS 服务端商城 HTML，不使用 Playwright。普�
 
 首页、商城入口、sitemap 或任何已发现分类只要发生 HTTP、超时或解析失败，整轮就失败；
 旧 BOILCLOUD state 保持不动，因此不会把分类临时失败误报为大量商品下架。只有所有分类
-都完整成功后才会提交 snapshot 并允许 `removed_product`。默认间隔为 120 秒，运行时仍可
+都完整成功后才会提交 snapshot 并允许 `removed_product`。每轮约 13 个请求，间隔为 600 秒，运行时仍可
 通过 Telegram 输入任意 10–86400 范围内的整数秒数并原样持久化。
 
 2026-10-18 起，BOILCLOUD 的补货、售罄和库存数字变化暂停发送 Telegram（仍照常写入 state，
@@ -140,7 +140,7 @@ FACHOST 官方主站和公开商城位于 `https://fachost.cloud/`，使用 Paym
 库存卡片显示 `N available` 时保存具体整数；若页面只给 `Available` 或 `Sold out`，则仅
 保存布尔状态，不猜测库存数字。名称、价格、付款周期、CPU、内存、磁盘、带宽、流量、
 IPv4/IPv6、分类、地区、详情页与直接结账页都从公开 HTML 取得。首次成功只建立 FACHOST
-baseline；默认扫描间隔为 60 秒，可从 Telegram 的独立 Provider 菜单修改并持久化。
+baseline；每轮约 5 个请求，扫描间隔为 300 秒，可从 Telegram 的独立 Provider 菜单修改并持久化。
 
 2026-09-27 的真实完整扫描从当前商城导航自动发现 5 个公开分类和 16 个可见商品；另有
 搜索索引仍能发现、当前可直接公开结账但不在商城导航中的 Hinet-VDS-Lite（真实 Product
@@ -164,7 +164,7 @@ catalog JSON/API；`cart.php` 会跳转到默认商品组，每个分类页的�
 搜索索引只发现一个已 302 到当前 `hiternet` 的旧分类别名，没有发现额外可购买的隐藏商品。
 商城扫描和商品购买链接固定使用官网的 CNY 货币编号 `2`，链接格式为
 `cart.php?a=add&pid=<PID>&currency=2`，不会跟随新会话回落到默认 HKD。首次成功只建立静默 baseline，
-默认扫描间隔为 120 秒。
+每轮约 14 个请求，扫描间隔为 600 秒。
 
 ### 利群汇聚
 
@@ -228,7 +228,7 @@ socks5（gid=11）新增 3 个一次性 ¥0.00 商品，完整扫描只需 2 个
 `purchasePaused` 的子类型不计价，记入 `metadata.order_page.paused`；全部暂停时商品记为
 无货。实测国家和城市不影响价格，数量按倍数计算。下单页结构不认识、某档算不出价格
 都会拒绝整轮 snapshot。完整计价约 25 个请求、15 秒，因此按
-`order_page_refresh_seconds`（默认 600 秒）缓存，卡片价格变化时立即重算。新品和价格
+`order_page_refresh_seconds`（配置为 1800 秒）缓存，卡片价格变化时立即重算。新品和价格
 变化通知会按网站顺序列出每一档价格。
 
 库存接口只返回 `available`/`scarce`/`unavailable` 三种状态，不给具体数量；逐国家查询
@@ -252,7 +252,9 @@ JSON 接口，不抓取渲染后的 UI，也不需要 Chromium。地区使用 AP
 13 个无货。API 当前只提供 `available` 与 `unavailable_reason=out_of_stock`，没有具体库存
 数字，因此 `stock=null`。价格字段为 `price_monthly`、`price_semiannual` 和
 `price_annual`，币种为 USD；当前 schema 没有原价、折扣或 promotion 字段，也没有正在
-进行的促销。完整扫描 43 个普通 GET，约 2.6–2.8 秒，默认间隔为 60 秒。
+进行的促销。完整扫描 43 个普通 GET，约 2.6–2.8 秒，间隔为 1800 秒。2026-10-22 起
+`app.misaka.io` 对机房 IP（含浏览器）返回 Vercel `x-vercel-mitigated: deny`，家庭宽带
+可正常访问；此前 60 秒一轮、每天约 6 万请求，已降到每天约 2 千。
 
 Misaka Route Watch 与库存扫描完全独立，默认每 1800 秒使用
 [Misaka 官方 Looking Glass](https://misaka.ping.sx/) 的公开 WebSocket MTR，从香港、台湾、
@@ -390,6 +392,16 @@ PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" \
 默认全局间隔 60 秒；`POLL_INTERVAL_SECONDS` 可覆盖全局默认，Provider 自己的
 `interval_seconds` 优先。DMIT 当前为 60 秒，以降低两分钟内短补货完全漏掉的概率；
 不要设置成 10 秒等高频值，以免对商城和 Cloudflare 造成不必要压力。
+
+**请求量原则（2026-10-22）：** 每轮只发 1 个请求的商家（NexKr、NewNB、DMIT、Blossom、
+利群汇聚）保持 60 秒；每轮要翻多页的商家放慢到每天约 2 千请求以内（BOILCLOUD、
+LeiKwanHost 600 秒，FACHOST 300 秒，Misaka 1800 秒，VMSILO 下单页计价缓存 1800 秒）。
+新增商家或改间隔时先算“每轮请求数 × 每天轮数”。Misaka 曾以每天约 6 万请求运行，
+之后被 Vercel 防火墙拒绝。
+
+**掉线通知：** 某商家连续失败至少 3 次且距上次成功超过 `outage_alert_after_seconds`
+（默认 3600 秒）时，发一次“⚠️ 监控异常”；之后第一次成功发“✅ 监控已恢复”。
+同一次故障只通知一次，状态记在 Provider 的 `outage_alerted_at`。
 
 ## Telegram
 

@@ -649,6 +649,32 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
     return "\n".join(lines)
 
 
+def format_provider_outage(
+    name: str, last_success: Optional[str], error: Optional[str]
+) -> str:
+    return "\n".join(
+        [
+            "<b>⚠️ %s 监控异常</b>" % html.escape(_provider_name(name)),
+            "",
+            "上次成功：%s" % _time(last_success),
+            "错误：%s" % html.escape((error or "未知")[:300]),
+            "",
+            "这期间该商家的上新、补货、价格变化都收不到；恢复后会再通知。",
+        ]
+    )
+
+
+def format_provider_recovery(name: str, alerted_at: Optional[str]) -> str:
+    return "\n".join(
+        [
+            "<b>✅ %s 监控已恢复</b>" % html.escape(_provider_name(name)),
+            "",
+            "异常通知时间：%s" % _time(alerted_at),
+            "恢复时间：%s" % _time(datetime.now(timezone.utc).isoformat()),
+        ]
+    )
+
+
 def format_status(
     state: Dict[str, Any],
     provider_intervals: Optional[Dict[str, int]] = None,

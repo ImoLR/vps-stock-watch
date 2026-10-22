@@ -54,6 +54,8 @@ from .telegram import (
     format_interval_menu,
     format_interval_prompt,
     format_interval_success,
+    format_provider_outage,
+    format_provider_recovery,
     format_status,
     format_route_status,
     format_stock_menu,
@@ -295,12 +297,17 @@ class WatcherApp:
             additional_changes = provider.additional_changes(products, previous_state)
             with self._lock:
                 first_run, changes = self.store.record_success(provider.name, products)
-                provider.update_state_after_success(
-                    self.store.provider(provider.name), products
-                )
+                entry = self.store.provider(provider.name)
+                outage_alerted_at = entry.pop("outage_alerted_at", None)
+                provider.update_state_after_success(entry, products)
                 if not first_run:
                     changes.extend(additional_changes)
                 self.store.save()
+            if outage_alerted_at:
+                self._send_text(
+                    format_provider_recovery(provider.name, outage_alerted_at),
+                    "recovery provider=%s" % provider.name,
+                )
             # Unchanged scans are the common case; keep them out of the journal.
             LOG.log(
                 logging.INFO if first_run or changes else logging.DEBUG,
@@ -341,8 +348,50 @@ class WatcherApp:
                 self.store.record_failure(
                     provider.name, "%s: %s" % (type(exc).__name__, exc)
                 )
+                entry = self.store.provider(provider.name)
+                alert = self._outage_due(entry)
+                if alert:
+                    entry["outage_alerted_at"] = alert
                 self.store.save()
+            if alert:
+                self._send_text(
+                    format_provider_outage(
+                        provider.name, entry.get("last_success_at"), entry["last_error"]
+                    ),
+                    "outage provider=%s" % provider.name,
+                )
             return False
+
+    def _outage_due(self, entry: Dict[str, Any]) -> Optional[str]:
+        """Return the alert timestamp when a provider has been down long enough.
+
+        One alert per outage: ``outage_alerted_at`` stays set until the next
+        successful scan, which then sends the recovery message.
+        """
+        if entry.get("outage_alerted_at") or int(entry.get("consecutive_failures", 0)) < 3:
+            return None
+        threshold = int(self.config.get("outage_alert_after_seconds", 3600))
+        now = datetime.now(timezone.utc)
+        last_success = entry.get("last_success_at")
+        if last_success:
+            since = datetime.fromisoformat(last_success.replace("Z", "+00:00"))
+            if (now - since).total_seconds() < threshold:
+                return None
+        return now.isoformat().replace("+00:00", "Z")
+
+    def _send_text(self, message: str, label: str) -> None:
+        if not self.telegram:
+            LOG.info("notification disabled: %s", message.replace("\n", " | "))
+            return
+        try:
+            with self._telegram_lock:
+                self.telegram.send(message)
+        except TelegramError:
+            LOG.exception("notification failed %s", label)
+            return
+        with self._lock:
+            self.store.increment_notifications()
+            self.store.save()
 
     @staticmethod
     def _fetch_products(provider: BaseProvider) -> List[Product]:
