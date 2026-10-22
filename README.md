@@ -204,6 +204,23 @@ socks5（gid=11）新增 3 个一次性 ¥0.00 商品，完整扫描只需 2 个
 分类标签少于 `minimum_categories`、某分类页标签不完整或高亮的不是所请求分类、缺少
 `bv-products-head` 布局、请求失败都会拒绝整轮 snapshot，避免误报批量下架。
 
+**踩坑（2026-10-22）：socks5 的 ¥0.00 只是卡片底价。** 用户登录后看到代理已有价格，
+监控却一直记 ¥0.00、从未提醒。原因是 Provider 只读分类卡片，没打开下单页。实际情况
+（未登录即可看到，全部公开）：
+
+- 下单页 `/store/socks5/<slug>` 由 `qqdlproxy` 模块渲染，页面内嵌
+  `<script id="qqdl-order-config">` JSON，列出子类型、时长、国家、城市、数量字段；
+- 价格要用表单字段 POST `cart.php?a=confproduct&calctotal=true` 实时计算，商品行价格
+  随时长/数量变化，各配置项本身显示 ¥0.00。当时测得：动态住宅 ¥45/GB（1–300 GB，
+  流量不过期）；静态住宅 7 天 ¥45、30 天 ¥90、360 天 ¥810；静态机房 30 天 ¥67.5、
+  360 天 ¥607.5；
+- 能否下单看两处：变体上的 `purchasePaused`（当时只有动态“Unlimited traffic
+  bandwidth”为 true），以及 POST `/modules/servers/qqdlproxy/stock.php`
+  （`pid` + `token` + 当前 configoption）返回的 `status`/`allowed`
+  （`available`/`scarce` 可下单，`unavailable` 不可）；
+- 分类名一直叫“socks5-开发中禁止购买”，但上述开关和库存接口都已放行，分类名不能
+  作为是否开卖的依据。分类名变化本身也不在通知范围内。
+
 ### Misaka
 
 Misaka 的控制台是 Vite SPA；前端 API client 公开调用
@@ -292,6 +309,20 @@ CN2 GIA 和 CN2 GT 的 ASN 路径相同，不区分，两者互换也不会被�
 - 两次都提供数字且数值变化：库存变化；
 - 价格、付款周期或名称变化：相应通知；
 - 上一份完整目录中存在、当前完整目录消失：商品下架。
+
+### 接入或排查站点：必须点到下单页
+
+列表页/分类页上的价格和状态不可信，接入新站点、新分类，或者用户说“网站上新了但没
+收到通知”时，都要逐个商品点进下单/配置页，一直走到“继续/加入购物车”按钮前，确认：
+
+- 真实价格从哪里来：卡片价、`configoption` 加价、还是页面 JS/AJAX 实时计算；
+- 有哪些时长、地区、子类型、数量/流量档位，各自价格多少；
+- 能不能下单由谁决定：按钮 disabled、`purchasePaused` 一类开关、库存查询接口，
+  还是分类名里的“禁止购买”字样；
+- 每个站点的下单页都不一样（NexKr 的 zone 级库存、VMSILO socks5 的配置项算价），
+  不能套用上一个站点的结论。
+
+只扫列表页漏掉过 VMSILO socks5 的真实价格（见下方 VMSILO 小节）。
 
 HTTP/解析失败只更新 Provider 错误和退避计数，不覆盖旧商品快照，也不会制造“全部
 下架”。连续失败从 Provider 的 `failure_retry_seconds`（未配置时使用正常间隔）开始指数
