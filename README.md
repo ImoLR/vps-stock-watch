@@ -109,7 +109,7 @@ BOILCLOUD 当前使用 WHMCS 服务端商城 HTML，不使用 Playwright。普�
 首页、商城入口、sitemap 或任何已发现分类只要发生 HTTP、超时或解析失败，整轮就失败；
 旧 BOILCLOUD state 保持不动，因此不会把分类临时失败误报为大量商品下架。只有所有分类
 都完整成功后才会提交 snapshot 并允许 `removed_product`。每轮约 13 个请求，间隔为 600 秒，运行时仍可
-通过 Telegram 输入任意 10–86400 范围内的整数秒数并原样持久化。
+通过 Telegram 输入 10 秒–24 小时之间的任意间隔（如 `90`、`10m`、`2h`）并原样持久化。
 
 2026-10-18 起，BOILCLOUD 的补货、售罄和库存数字变化暂停发送 Telegram（仍照常写入 state，
 `/status`、`/stock` 不受影响），只有两类商品例外：SeedNet 线路（名称、分类名或商品说明含
@@ -252,9 +252,10 @@ JSON 接口，不抓取渲染后的 UI，也不需要 Chromium。地区使用 AP
 13 个无货。API 当前只提供 `available` 与 `unavailable_reason=out_of_stock`，没有具体库存
 数字，因此 `stock=null`。价格字段为 `price_monthly`、`price_semiannual` 和
 `price_annual`，币种为 USD；当前 schema 没有原价、折扣或 promotion 字段，也没有正在
-进行的促销。完整扫描 43 个普通 GET，约 2.6–2.8 秒，间隔为 1800 秒。2026-10-22 起
+进行的促销。完整扫描 43 个普通 GET，约 2.6–2.8 秒，间隔为 7200 秒（2 小时，用户确认
+Misaka 库存很少变化）。2026-10-22 起
 `app.misaka.io` 对机房 IP（含浏览器）返回 Vercel `x-vercel-mitigated: deny`，家庭宽带
-可正常访问；此前 60 秒一轮、每天约 6 万请求，已降到每天约 2 千。
+可正常访问；此前 60 秒一轮、每天约 6 万请求，已降到每天约 500。
 
 Misaka Route Watch 与库存扫描完全独立，默认每 1800 秒使用
 [Misaka 官方 Looking Glass](https://misaka.ping.sx/) 的公开 WebSocket MTR，从香港、台湾、
@@ -395,7 +396,7 @@ PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" \
 
 **请求量原则（2026-10-22）：** 每轮只发 1 个请求的商家（NexKr、NewNB、DMIT、Blossom、
 利群汇聚）保持 60 秒；每轮要翻多页的商家放慢到每天约 2 千请求以内（BOILCLOUD、
-LeiKwanHost 600 秒，FACHOST 300 秒，Misaka 1800 秒，VMSILO 下单页计价缓存 1800 秒）。
+LeiKwanHost 600 秒，FACHOST 300 秒，Misaka 7200 秒，VMSILO 下单页计价缓存 1800 秒）。
 新增商家或改间隔时先算“每轮请求数 × 每天轮数”。Misaka 曾以每天约 6 万请求运行，
 之后被 Vercel 防火墙拒绝。
 
@@ -434,14 +435,16 @@ Provider 数量、各 Provider 最近检查/成功时间、商品数、有货数
 保留最后一次成功库存。命令消息和每一次 callback 都重新校验管理员 chat 与 sender。
 
 扫描间隔菜单显示全部九个 Provider 的当前有效间隔。管理员选择商家后
-直接输入整数秒数；允许范围为 10–86400 秒，输入 `17` 就会原样保存为 17 秒，没有预设
-按钮或取整。只有 `.env` 中 `TELEGRAM_CHAT_ID` 对应的私聊用户同时匹配 callback 发送者
+直接输入间隔：纯数字或 `s` 结尾为秒，`m` 为分钟，`h` 为小时，可组合（`1h30m`），也接受
+`30分钟`、`2小时`；允许范围 10 秒–24 小时，输入 `17` 原样保存为 17 秒，没有预设按钮或取整。
+状态、菜单和设置结果都按“2 小时 / 10 分钟 / 45 秒”显示。只有 `.env` 中 `TELEGRAM_CHAT_ID` 对应的私聊用户同时匹配 callback 发送者
 和消息 chat 时才可以修改，直接发送数字也不能绕过权限。
 
 运行时覆盖值原子保存在已忽略的 `data/state.json` 内：
 `settings.provider_intervals.<provider>`。设置成功后只重排目标 Provider 的下一次检查，
 无需重启；服务或 VPS 重启后继续使用最后保存的值。未设置覆盖值时使用 `config.yaml`
-中该 Provider 的 `interval_seconds`。调度器按 Provider 保存独立 deadline，并且同一个
+中该 Provider 的 `interval_seconds`。Telegram 覆盖值优先于 `config.yaml`，所以在
+`config.yaml` 改某个商家的间隔时，要同时删掉它的覆盖值，否则 TG 设置的旧值继续生效。调度器按 Provider 保存独立 deadline，并且同一个
 Provider 完成当前抓取后才安排下一轮，不会堆积重入任务或多个 Chromium。
 
 抢购程序（`watcher.nexkr_autobuy`、`watcher.nnb_autobuy`）是独立进程，各自每 30 秒以及

@@ -61,6 +61,7 @@ from .telegram import (
     format_stock_menu,
     format_stock_provider,
     interval_menu_markup,
+    parse_interval,
     stock_menu_markup,
     stock_provider_markup,
     status_menu_markup,
@@ -465,11 +466,8 @@ class WatcherApp:
             self._pending_interval_provider = None
             self._send_interval_menu()
             return
-        if not re.fullmatch(r"[0-9]+", text):
-            self._send_telegram(format_interval_invalid(MIN_SCAN_INTERVAL, MAX_SCAN_INTERVAL))
-            return
-        seconds = int(text)
-        if not MIN_SCAN_INTERVAL <= seconds <= MAX_SCAN_INTERVAL:
+        seconds = parse_interval(text)
+        if seconds is None or not MIN_SCAN_INTERVAL <= seconds <= MAX_SCAN_INTERVAL:
             self._send_telegram(format_interval_invalid(MIN_SCAN_INTERVAL, MAX_SCAN_INTERVAL))
             return
         name = self._pending_interval_provider

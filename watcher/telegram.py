@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
@@ -485,10 +486,56 @@ def _join_stock_blocks(left: str, right: str) -> str:
     return "%s\n\n%s" % (left, right) if left else right
 
 
+INTERVAL_UNITS = {
+    "s": 1, "sec": 1, "秒": 1,
+    "m": 60, "min": 60, "分": 60, "分钟": 60, "分鐘": 60,
+    "h": 3600, "hr": 3600, "小时": 3600, "小時": 3600,
+}
+_INTERVAL_PART = re.compile(r"([0-9]+)\s*([a-z\u4e00-\u9fff]*)")
+
+
+def parse_interval(text: str) -> Optional[int]:
+    """Parse ``90``, ``90s``, ``30m``, ``2h``, ``1h30m`` or ``2小时`` into seconds.
+
+    A bare number means seconds. Returns ``None`` for anything else
+    (decimals, negative numbers, unknown units).
+    """
+    value = "".join(str(text).split()).casefold()
+    if not value:
+        return None
+    total, position = 0, 0
+    for match in _INTERVAL_PART.finditer(value):
+        if match.start() != position:
+            return None
+        unit = match.group(2) or "s"
+        if unit not in INTERVAL_UNITS:
+            return None
+        total += int(match.group(1)) * INTERVAL_UNITS[unit]
+        position = match.end()
+    return total if position == len(value) else None
+
+
+def format_duration(seconds: int) -> str:
+    """Show an interval as 2 小时 / 30 分钟 / 1 小时 30 分钟 / 45 秒."""
+    seconds = int(seconds)
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    parts = []
+    if hours:
+        parts.append("%d 小时" % hours)
+    if minutes:
+        parts.append("%d 分钟" % minutes)
+    if secs or not parts:
+        parts.append("%d 秒" % secs)
+    return " ".join(parts)
+
+
 def format_interval_menu(intervals: Dict[str, int], provider_names: List[str]) -> str:
     lines = ["<b>⏱ 扫描间隔设置</b>", ""]
     for name in provider_names:
-        lines.append("%s：%s 秒" % (html.escape(_provider_name(name)), intervals[name]))
+        lines.append(
+            "%s：%s" % (html.escape(_provider_name(name)), format_duration(intervals[name]))
+        )
     lines.extend(["", "请选择要修改的商家："])
     return "\n".join(lines)
 
@@ -512,10 +559,11 @@ def format_interval_prompt(name: str, current: int, minimum: int, maximum: int) 
         [
             "<b>⏱ 设置 %s 扫描间隔</b>" % html.escape(_provider_name(name)),
             "",
-            "当前：%s 秒" % current,
+            "当前：%s" % format_duration(current),
             "",
-            "请直接输入新的扫描间隔（秒）。",
-            "允许范围：%s–%s 秒。" % (minimum, maximum),
+            "请直接输入新的扫描间隔，例如：",
+            "90 或 90s = 90 秒；30m = 30 分钟；2h = 2 小时；1h30m = 1 小时 30 分钟",
+            "允许范围：%s–%s。" % (format_duration(minimum), format_duration(maximum)),
             "",
             "发送“取消”可退出设置。",
         ]
@@ -528,7 +576,7 @@ def format_interval_success(name: str, old: int, new: int) -> str:
             "<b>✅ 设置成功</b>",
             "",
             html.escape(_provider_name(name)),
-            "%s 秒 → %s 秒" % (old, new),
+            "%s → %s" % (format_duration(old), format_duration(new)),
             "",
             "新的扫描间隔已经生效。",
         ]
@@ -538,7 +586,8 @@ def format_interval_success(name: str, old: int, new: int) -> str:
 def format_interval_invalid(minimum: int, maximum: int) -> str:
     return "\n".join(
         [
-            "输入无效，请输入 %s–%s 之间的整数秒数。" % (minimum, maximum),
+            "输入无效，请输入 %s–%s 之间的间隔，如 90、30m、2h、1h30m。"
+            % (format_duration(minimum), format_duration(maximum)),
             "发送“取消”可退出设置。",
         ]
     )
@@ -744,7 +793,7 @@ def format_status(
                     ]
                 )
                 if route_interval is not None:
-                    lines.append("线路扫描间隔：%s 秒" % route_interval)
+                    lines.append("线路扫描间隔：%s" % format_duration(route_interval))
                 lines.append(
                     "最近线路错误：%s"
                     % html.escape(str(route_state.get("last_error") or "无"))
@@ -757,7 +806,7 @@ def format_status(
                 ]
             )
         if provider_intervals and name in provider_intervals:
-            lines.append("扫描间隔：%s 秒" % provider_intervals[name])
+            lines.append("扫描间隔：%s" % format_duration(provider_intervals[name]))
         lines.append("最近错误：%s" % html.escape(str(provider.get("last_error") or "无")))
     return "\n".join(lines)
 

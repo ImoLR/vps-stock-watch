@@ -195,9 +195,9 @@ class StockQueryTests(unittest.TestCase):
         self.assertIn("<b>Misaka</b>", status)
         self.app.process_update(callback(INTERVAL_MENU_CALLBACK))
         text, markup = self.app.telegram.sent[-1]
-        self.assertIn("利群汇聚：60 秒", text)
-        self.assertIn("VMSILO：60 秒", text)
-        self.assertIn("Misaka：60 秒", text)
+        self.assertIn("利群汇聚：1 分钟", text)
+        self.assertIn("VMSILO：1 分钟", text)
+        self.assertIn("Misaka：1 分钟", text)
         labels = [row[0]["text"] for row in markup["inline_keyboard"]]
         self.assertEqual(
             labels,

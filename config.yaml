@@ -182,7 +182,7 @@ providers:
       HK: Hong Kong
       TW: Taiwan
       JP: Japan
-    interval_seconds: 1800
+    interval_seconds: 7200
     timeout_seconds: 20
     retry_attempts: 2
     retry_backoff_seconds: 0.5
@@ -191,7 +191,7 @@ providers:
     max_regions: 100
     minimum_region_retention_ratio: 0.8
     minimum_product_retention_ratio: 0.7
-    max_backoff_seconds: 1800
+    max_backoff_seconds: 7200
 
 # A simple provider can be added without Python. Example:
 #  - name: example

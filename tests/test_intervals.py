@@ -8,6 +8,8 @@ from watcher.app import WatcherApp
 from watcher.telegram import (
     INTERVAL_MENU_CALLBACK,
     INTERVAL_PROVIDER_PREFIX,
+    format_duration,
+    parse_interval,
 )
 
 
@@ -93,9 +95,9 @@ class IntervalMenuTests(unittest.TestCase):
 
         self.app.process_update(callback(INTERVAL_MENU_CALLBACK))
         text, markup = self.app.telegram.sent[-1]
-        self.assertIn("NexKr：60 秒", text)
-        self.assertIn("DMIT：120 秒", text)
-        self.assertIn("Blossom Host：60 秒", text)
+        self.assertIn("NexKr：1 分钟", text)
+        self.assertIn("DMIT：2 分钟", text)
+        self.assertIn("Blossom Host：1 分钟", text)
         labels = [row[0]["text"] for row in markup["inline_keyboard"]]
         self.assertEqual(labels, ["NexKr", "DMIT", "Blossom Host", "返回"])
 
@@ -143,7 +145,7 @@ class IntervalMenuTests(unittest.TestCase):
     def test_arbitrary_legal_integer_is_saved_without_rounding(self):
         self.set_interval("blossom", 17)
         self.assertEqual(self.app.store.provider_intervals()["blossom"], 17)
-        self.assertIn("60 秒 → 17 秒", self.app.telegram.sent[-2][0])
+        self.assertIn("1 分钟 → 17 秒", self.app.telegram.sent[-2][0])
 
     def test_invalid_inputs_are_rejected_and_prompt_repeats(self):
         for value in ("abc", "1.5", "-10", "0", "9", "86401"):
@@ -153,6 +155,32 @@ class IntervalMenuTests(unittest.TestCase):
                 self.assertEqual(self.app.provider_interval("nexkr"), 60)
                 self.assertEqual(self.app._pending_interval_provider, "nexkr")
                 self.assertIn("输入无效", self.app.telegram.sent[-1][0])
+
+    def test_minute_and_hour_inputs_are_accepted(self):
+        cases = (
+            ("30m", 1800), ("2h", 7200), ("1h30m", 5400),
+            ("90s", 90), ("2小时", 7200), (" 45 M ", 2700),
+        )
+        for text, seconds in cases:
+            with self.subTest(text=text):
+                self.set_interval("nexkr", text)
+                self.assertEqual(self.app.provider_interval("nexkr"), seconds)
+        self.assertIn("2 小时 → 45 分钟", self.app.telegram.sent[-2][0])
+
+    def test_unit_inputs_outside_range_or_unknown_are_rejected(self):
+        for value in ("25h", "5s", "3d", "m", "1h-5m"):
+            with self.subTest(value=value):
+                self.app._pending_interval_provider = "nexkr"
+                self.app.process_update(message(value))
+                self.assertEqual(self.app.provider_interval("nexkr"), 60)
+                self.assertIn("输入无效", self.app.telegram.sent[-1][0])
+
+    def test_interval_text_is_shown_in_minutes_and_hours(self):
+        self.assertEqual(format_duration(45), "45 秒")
+        self.assertEqual(format_duration(600), "10 分钟")
+        self.assertEqual(format_duration(7200), "2 小时")
+        self.assertEqual(format_duration(5430), "1 小时 30 分钟 30 秒")
+        self.assertEqual(parse_interval("1h30"), 3630)
 
     def test_cancel_exits_input_and_returns_to_interval_menu(self):
         self.choose("nexkr")
