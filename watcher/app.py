@@ -562,10 +562,11 @@ class WatcherApp:
                 intervals,
                 route_state=route_state,
                 route_interval=(
-                    int(self.route_config.get("interval_seconds", 1800))
+                    int(self.route_config.get("interval_seconds", 7200))
                     if self.route_config
                     else None
                 ),
+                enabled=[provider.name for provider in self.providers],
             ),
             status_menu_markup(route_enabled=bool(self.route_config)),
         )

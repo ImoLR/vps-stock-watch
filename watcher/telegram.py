@@ -729,8 +729,13 @@ def format_status(
     provider_intervals: Optional[Dict[str, int]] = None,
     route_state: Optional[Dict[str, Any]] = None,
     route_interval: Optional[int] = None,
+    enabled: Optional[Iterable[str]] = None,
 ) -> str:
     providers = state.get("providers", {})
+    if enabled is not None:
+        # Disabled providers keep their old state; don't report it as live.
+        names = set(enabled)
+        providers = {name: value for name, value in providers.items() if name in names}
     all_products = [item for provider in providers.values() for item in provider.get("products", {}).values()]
     available = sum(1 for item in all_products if item.get("available") is True)
     healthy = bool(providers) and all(

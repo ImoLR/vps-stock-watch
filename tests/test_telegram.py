@@ -38,6 +38,18 @@ class TelegramFormattingTests(unittest.TestCase):
         self.assertIn("累计通知：4", message)
         self.assertIn("HTTP 403", message)
 
+    def test_status_hides_disabled_providers(self):
+        healthy = {
+            "last_check_at": None,
+            "last_success_at": "2026-10-28T10:00:00Z",
+            "last_error": None,
+            "products": {},
+        }
+        state = {"providers": {"dmit": dict(healthy), "liqunhuiju": dict(healthy)}}
+        message = format_status(state, enabled=["dmit"])
+        self.assertIn("Provider 数量：1", message)
+        self.assertNotIn("利群汇聚", message)
+
     def test_network_error_does_not_expose_bot_token(self):
         client = TelegramClient("secret-token", "123")
         with patch.object(
