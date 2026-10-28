@@ -180,6 +180,9 @@ catalog JSON/API；`cart.php` 会跳转到默认商品组，每个分类页的�
 landing page，也会拒绝空快照并保留旧 state；只有明确的完整 catalog 空标记才允许从
 N 个商品变成 0 并产生正常下架变化。当前扫描只需 1 个普通 HTTP GET，不需要 Chromium。
 
+2026-10-28 起按用户要求在 `config.yaml` 中 `enabled: false` 停用：该门户一直没有公开商品，
+LeiKwan 库存由 `leikwanhost` 扫描覆盖。代码保留，需要时改回 `enabled: true` 即可。
+
 ### VMSILO
 
 VMSILO 位于 `https://portal.vmsilo.com/`，使用 WHMCS。2026-10-08 之后站点从 ShufyTheme
@@ -396,8 +399,8 @@ PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" \
 `interval_seconds` 优先。DMIT 当前为 60 秒，以降低两分钟内短补货完全漏掉的概率；
 不要设置成 10 秒等高频值，以免对商城和 Cloudflare 造成不必要压力。
 
-**请求量原则（2026-10-22）：** 每轮只发 1 个请求的商家（NexKr、NewNB、DMIT、Blossom、
-利群汇聚）保持 60 秒；每轮要翻多页的商家放慢到每天约 2 千请求以内（BOILCLOUD、
+**请求量原则（2026-10-22）：** 每轮只发 1 个请求的商家（NexKr、NewNB、DMIT、Blossom）
+保持 60 秒；每轮要翻多页的商家放慢到每天约 2 千请求以内（BOILCLOUD、
 LeiKwanHost 600 秒，FACHOST 300 秒，Misaka 库存与 Route Watch 均 7200 秒，VMSILO 下单页计价缓存 1800 秒）。
 新增商家或改间隔时先算“每轮请求数 × 每天轮数”。Misaka 曾以每天约 6 万请求运行，
 之后被 Vercel 防火墙拒绝。

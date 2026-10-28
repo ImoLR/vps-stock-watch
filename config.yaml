@@ -147,9 +147,11 @@ providers:
     max_categories: 100
     max_backoff_seconds: 1800
 
+  # Disabled 2026-10-28 at the user's request: the portal has no public
+  # products and the leikwanhost scan already covers LeiKwan stock.
   - name: liqunhuiju
     type: liqunhuiju
-    enabled: true
+    enabled: false
     base_url: https://v3.leikwanhost.com/
     interval_seconds: 60
     timeout_seconds: 25
