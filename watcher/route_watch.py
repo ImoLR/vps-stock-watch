@@ -22,7 +22,7 @@ import websocket
 
 PING_SX_API = "https://public-us-pingsx.api.clonoth.com/v2"
 PING_SX_WS = "wss://public-us-pingsx.api.clonoth.com/v2/probe/ws"
-MISAKA_CATALOG_API = "https://app.misaka.io/api/mc2"
+MISAKA_CATALOG_API = "https://api.misaka.io/mc2"
 PING_SX_ORIGIN = "https://misaka.ping.sx"
 # Carrier premium networks, half or full premium alike. A confirmed route
 # change is only sent to Telegram when the old or the new path uses one of
@@ -784,7 +784,7 @@ class RouteWatchScheduler:
         delay = 0.0
         while not self._stop.wait(delay):
             ok = self.watcher.run_cycle()
-            interval = max(60, int(self.config.get("interval_seconds", 1800)))
+            interval = max(60, int(self.config.get("interval_seconds", 7200)))
             failures = int(self.watcher.store.data.get("consecutive_failures", 0))
             if ok:
                 delay = float(interval)

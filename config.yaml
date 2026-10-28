@@ -5,7 +5,7 @@ outage_alert_after_seconds: 3600
 route_watch:
   enabled: true
   state_path: data/route_state.json
-  interval_seconds: 1800
+  interval_seconds: 7200
   max_backoff_seconds: 7200
   focus_regions:
     - HK
@@ -14,7 +14,7 @@ route_watch:
   directory_url: https://public-us-pingsx.api.clonoth.com/v2/probe/lg/misaka
   websocket_url: wss://public-us-pingsx.api.clonoth.com/v2/probe/ws
   origin: https://misaka.ping.sx
-  catalog_api_base: https://app.misaka.io/api/mc2
+  catalog_api_base: https://api.misaka.io/mc2
   directory_timeout_seconds: 20
   measurement_timeout_seconds: 120
   asn_timeout_seconds: 5
@@ -172,7 +172,7 @@ providers:
   - name: misaka
     type: misaka
     enabled: true
-    api_base: https://app.misaka.io/api/mc2
+    api_base: https://api.misaka.io/mc2
     buy_base: https://app.misaka.io/iaas/vm/create
     focus_regions:
       - HK

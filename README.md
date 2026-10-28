@@ -255,9 +255,11 @@ JSON 接口，不抓取渲染后的 UI，也不需要 Chromium。地区使用 AP
 进行的促销。完整扫描 43 个普通 GET，约 2.6–2.8 秒，间隔为 7200 秒（2 小时，用户确认
 Misaka 库存很少变化）。2026-10-22 起
 `app.misaka.io` 对机房 IP（含浏览器）返回 Vercel `x-vercel-mitigated: deny`，家庭宽带
-可正常访问；此前 60 秒一轮、每天约 6 万请求，已降到每天约 500。
+可正常访问；此前 60 秒一轮、每天约 6 万请求，已降到每天约 500。2026-10-28 起库存扫描和
+Route Watch 都改走 Cloudflare 上的 `https://api.misaka.io/mc2`（同一份 JSON，未被封），
+`app.misaka.io` 仍只用于给用户的购买链接。
 
-Misaka Route Watch 与库存扫描完全独立，默认每 1800 秒使用
+Misaka Route Watch 与库存扫描完全独立，默认每 7200 秒（2 小时）使用
 [Misaka 官方 Looking Glass](https://misaka.ping.sx/) 的公开 WebSocket MTR，从香港、台湾、
 日本各自最高的已标注线路等级（当前均为 Premium Plus）主动测向广东电信、联通、移动
 三个固定 IPv4 目标。节点来自官方 probe directory，并与 `/api/mc2/regions` 的 speedtest
@@ -396,7 +398,7 @@ PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" \
 
 **请求量原则（2026-10-22）：** 每轮只发 1 个请求的商家（NexKr、NewNB、DMIT、Blossom、
 利群汇聚）保持 60 秒；每轮要翻多页的商家放慢到每天约 2 千请求以内（BOILCLOUD、
-LeiKwanHost 600 秒，FACHOST 300 秒，Misaka 7200 秒，VMSILO 下单页计价缓存 1800 秒）。
+LeiKwanHost 600 秒，FACHOST 300 秒，Misaka 库存与 Route Watch 均 7200 秒，VMSILO 下单页计价缓存 1800 秒）。
 新增商家或改间隔时先算“每轮请求数 × 每天轮数”。Misaka 曾以每天约 6 万请求运行，
 之后被 Vercel 防火墙拒绝。
 

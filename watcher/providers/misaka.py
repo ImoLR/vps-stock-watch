@@ -15,7 +15,7 @@ from .base import BaseProvider, FetchError, ParseError, is_challenge_page
 class MisakaProvider(BaseProvider):
     """Monitor Misaka's global catalog and focused APAC inventory."""
 
-    API_BASE = "https://app.misaka.io/api/mc2"
+    API_BASE = "https://api.misaka.io/mc2"
     BUY_BASE = "https://app.misaka.io/iaas/vm/create"
     DEFAULT_FOCUS_REGIONS = ("HK", "TW", "JP")
 
