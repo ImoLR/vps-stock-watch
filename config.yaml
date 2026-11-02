@@ -171,6 +171,31 @@ providers:
     max_backoff_seconds: 1800
     order_page_refresh_seconds: 1800
 
+  # CloudIPLC (云际互联): WHMCS category pages over HTTP every 5 min (~7
+  # requests, 5 s apart). Stock only shows on cart.php?a=add, which EdgeOne
+  # guards with a JS check, so those pages open in an isolated Chromium every
+  # 2 h (new PIDs on first sight). Never retried on a block page.
+  - name: cloudiplc
+    type: cloudiplc
+    enabled: true
+    base_url: https://www.cloudiplc.com/
+    interval_seconds: 300
+    timeout_seconds: 30
+    request_spacing_seconds: 5
+    retry_attempts: 2
+    max_categories: 40
+    minimum_products: 10
+    max_backoff_seconds: 3600
+    order_page_check: true
+    order_page_refresh_seconds: 7200
+    order_page_retry_seconds: 1800
+    scan_memory_high_mb: 600
+    scan_memory_max_mb: 700
+    browser_headless: false
+    browser_args:
+      - --disable-blink-features=AutomationControlled
+      - --renderer-process-limit=2
+
   - name: misaka
     type: misaka
     enabled: true

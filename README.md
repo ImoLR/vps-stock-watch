@@ -3,7 +3,7 @@
 一个面向多 VPS/IDC 商家的轻量监控器。Provider 只负责把站点转换成统一
 `Product`；完整目录比较、JSON 状态、失败退避、Telegram 和 `/status` 都在核心层。
 
-内置 NexKr、NewNB、DMIT、Blossom Host、BOILCLOUD、FACHOST、LeiKwanHost、利群汇聚、VMSILO 与 Misaka，
+内置 NexKr、NewNB、DMIT、Blossom Host、BOILCLOUD、FACHOST、LeiKwanHost、利群汇聚、VMSILO、CloudIPLC 与 Misaka，
 同时提供 CSS、XPath、Regex、JSONPath 规则，可用 YAML 接入结构简单的网站；复杂网站继续
 增加 Python Provider。
 
@@ -236,6 +236,34 @@ socks5（gid=11）新增 3 个一次性 ¥0.00 商品，完整扫描只需 2 个
 
 库存接口只返回 `available`/`scarce`/`unavailable` 三种状态，不给具体数量；逐国家查询
 需要几百个请求，目前不监控地区库存。
+
+### CloudIPLC（云际互联）
+
+2026-11-02 接入。`https://www.cloudiplc.com/` 是 WHMCS + NeWorld-New 订购模板，前面套了
+腾讯 EdgeOne。卖泉州 CN2 VPS、沪日 IPLC NAT（上海 BGP → 东京 NTT+BBIX）、沪日/深港
+IPLC 独服，以及日本、香港、洛杉矶、大陆独服。
+
+- **分类页**（`cart.php`、`cart.php?gid=N`）普通 HTTP 就能拿到，每个 `a.pt__row` 是一个
+  商品，PID 来自 `cart.php?a=add&pid=N`；表头决定 CPU/内存/硬盘/地址/流量/带宽列，
+  `.pt__remark` 里有“线路/备注”。分组从页面里所有 `cart.php?gid=N` 链接发现，**包括
+  HTML 注释里的**（顶部菜单里 VDS `gid=8` 被注释掉了，当前是空组，空组提示“产品组不包含
+  任何可见的产品”是合法空目录）。2026-11-02：7 个分组、20 个 PID。
+- **列表价不是月付价**：VPS/NAT 行显示 `￥84.17/月(按年)`，是年付折算；下单页才是真实
+  月付。IPLC TY-NAT Rev2-1 实际为 `￥19.99/月` 基础价 + 必选流量档（100GB ¥70 起，
+  0.70 元/G）+ ¥100 初装费，默认首付 ¥189.99。`price` 仍存列表价，下单页每个付款周期的
+  `data-billing` 存进 `pricing`，默认首付存 `metadata.order_page.total`。
+- **库存只在下单页**：列表不显示库存。`cart.php?a=add&pid=N` 有货时 302 到
+  `a=confproduct`；缺货时是 WHMCS 的“缺货 / 目前该项目缺货，所以订购已被暂停”页
+  （2026-11-02 洛杉矶 pid 30/42 就是这样）。但这个地址被 EdgeOne 的 JS cookie 校验挡住
+  （`EO_Bot_Ssid` / `__tst_status`），普通 HTTP 只能拿到校验脚本，所以下单页用隔离进程
+  里的 Chromium（xvfb 有头模式）打开，结果缓存 `order_page_refresh_seconds`（7200 秒）；
+  新出现的 PID 在第一次看到的那轮就检查。浏览器检查失败时保留上次结果，
+  `order_page_retry_seconds`（1800 秒）内不重试，绝不因此报售罄；认不出的页面记 warning
+  并保留上次结果。隔离扫描全局串行，避免和 DMIT 的 Chromium 同时占内存。
+- **频率**：分类页每 300 秒一轮，约 7 个请求，请求之间 `request_spacing_seconds: 5`，
+  约 2k 请求/天；下单页每 2 小时约 20 个页面，也是 5 秒间隔，一轮约 4 分钟。遇到 403/429
+  或 EdgeOne 校验页立即失败、不在本轮重试，由调度器退避（最长 3600 秒）。
+- 首页还有两个不在任何分组里的老链接（pid 27“洛杉矶A”、pid 5“俄罗斯”），目前没有监控。
 
 ### Misaka
 

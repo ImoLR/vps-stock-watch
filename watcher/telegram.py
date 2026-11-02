@@ -1060,6 +1060,7 @@ def _provider_name(value: str) -> str:
         "dmit": "DMIT",
         "blossom": "Blossom Host",
         "boilcloud": "BOILCLOUD",
+        "cloudiplc": "CloudIPLC",
         "fachost": "FACHOST",
         "leikwanhost": "LeiKwanHost",
         "liqunhuiju": "利群汇聚",

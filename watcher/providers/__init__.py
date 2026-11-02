@@ -5,6 +5,7 @@ from typing import Any, Dict
 from .base import BaseProvider
 from .blossom import BlossomProvider
 from .boilcloud import BoilcloudProvider
+from .cloudiplc import CloudiplcOrderCheck, CloudiplcProvider
 from .dmit import DmitProvider
 from .fachost import FachostProvider
 from .generic import GenericProvider
@@ -21,6 +22,9 @@ def build_provider(config: Dict[str, Any]) -> BaseProvider:
     classes = {
         "blossom": BlossomProvider,
         "boilcloud": BoilcloudProvider,
+        "cloudiplc": CloudiplcProvider,
+        # Internal: CloudIPLC order pages, run only inside an isolated scan.
+        "cloudiplc_orders": CloudiplcOrderCheck,
         "nexkr": NexKrProvider,
         "nnb": NnbProvider,
         "dmit": DmitProvider,
@@ -40,6 +44,7 @@ __all__ = [
     "BaseProvider",
     "BlossomProvider",
     "BoilcloudProvider",
+    "CloudiplcProvider",
     "FachostProvider",
     "LeikwanhostProvider",
     "LiqunHuijuProvider",

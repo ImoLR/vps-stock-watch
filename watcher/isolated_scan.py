@@ -20,10 +20,18 @@ LOG = logging.getLogger(__name__)
 SCAN_MARKER_ENV = "VPS_STOCK_SCAN_ID"
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_SCANS: Dict[str, tuple[subprocess.Popen[str], Optional[Path]]] = {}
+# Isolated scans run Chromium; one at a time keeps two browsers out of the
+# service's memory limit (DMIT and the CloudIPLC order pages).
+_SCAN_SERIAL_LOCK = threading.Lock()
 
 
 def fetch_products_isolated(config: Dict[str, Any]) -> List[Product]:
     """Fetch a provider snapshot in a killable process with a wall-clock limit."""
+    with _SCAN_SERIAL_LOCK:
+        return _fetch_products_isolated(config)
+
+
+def _fetch_products_isolated(config: Dict[str, Any]) -> List[Product]:
     timeout = max(0.1, float(config.get("scan_timeout_seconds", 75)))
     marker = uuid.uuid4().hex
     environment = os.environ.copy()

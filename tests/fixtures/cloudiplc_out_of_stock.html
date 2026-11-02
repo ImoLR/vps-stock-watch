@@ -1,0 +1,286 @@
+<!DOCTYPE html><html lang="zh_CN"><head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>购物车 - CloudIPLC</title>
+
+    <!-- Styling -->
+<link href="https://fonts.loli.net/css?family=Open+Sans:300,400,600|Raleway:300,400,700" rel="stylesheet">
+
+<link href="https://cdnjs.loli.net/ajax/libs/material-design-iconic-font/2.2.0/css/material-design-iconic-font.min.css?v=1c88fb" rel="stylesheet">
+
+<!-- Dynamic Template Compatibility -->
+<link rel="stylesheet" type="text/css" href="/assets/css/fontawesome-all.min.css">
+
+<link href="/templates/NeWorld-New/assets/css/all.min.css?1c88fb" rel="stylesheet">
+<link href="/templates/NeWorld-New/assets/css/main.css?1" rel="stylesheet">
+<link href="/templates/NeWorld-New/assets/css/custom.css?75" rel="stylesheet">
+
+<!-- HTML5 Shim and Respond.js IE8 support of HTML5 elements and media queries -->
+<!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+<!--[if lt IE 9]>
+  <script src="https://oss.maxcdn.com/libs/html5shiv/3.7.0/html5shiv.js"></script>
+  <script src="https://oss.maxcdn.com/libs/respond.js/1.4.2/respond.min.js"></script>
+<![endif]-->
+
+<script type="text/javascript">
+    var csrfToken = '0000',
+        markdownGuide = 'Markdown 使用教程',
+        locale = 'en',
+        saved = '已保存',
+        saving = '自动保存';
+</script>
+<script src="/templates/NeWorld-New/assets/js/main.min.js?v=3"></script><style type="text/css">/* Chart.js */
+@-webkit-keyframes chartjs-render-animation{from{opacity:0.99}to{opacity:1}}@keyframes chartjs-render-animation{from{opacity:0.99}to{opacity:1}}.chartjs-render-monitor{-webkit-animation:chartjs-render-animation 0.001s;animation:chartjs-render-animation 0.001s;}</style>
+<script src="/templates/NeWorld-New/assets/js/scripts.min.js?1c88fb"></script>
+<script src="/templates/NeWorld-New/assets/js/clipboard.min.js?1c88fb"></script>
+<script src="/templates/NeWorld-New/assets/js/lightslider.js?1c88fb"></script>
+<script src="/templates/NeWorld-New/assets/js/select2.min.js?1c88fb"></script>
+<script src="/templates/NeWorld-New/assets/js/dashboard.js?1c88fb"></script>
+
+
+    
+
+</head>
+
+<body class="c-login-wrapper error" data-phone-cc-input="">
+
+
+
+
+			
+									<header class="c-navbar">
+	<div class="container">
+	    <a class="c-navbar_brand" href="https://www.cloudiplc.com/">
+	        CloudIPLC
+	    </a>
+	   
+	   <!-- Navigation items that will be collapes and toggle in small viewports -->
+	    <nav class="c-nav u-ml-auto collapse" id="main-nav">
+	        <ul class="c-nav__list">
+	            <li class="c-nav__item">
+	                <a class="c-nav__link" href="https://www.cloudiplc.com/">网站首页</a>
+	            </li>
+	            <li class="c-nav__item">
+	                <a class="c-nav__link" href="https://www.cloudiplc.com/register.php">注册</a>
+	            </li>
+	            <!-- <li class="c-nav__item dropdown">
+					<a class="c-nav__link dropdown-toggle" href="#" id="navbarDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+						产品中心
+					</a>
+					<div class="c-dropdown__menu dropdown-menu" aria-labelledby="navbarDropdown">
+						<a class="c-dropdown__item dropdown-item" href="https://www.cloudiplc.com/pages.php?page=cloud">虚拟主机</a>
+						<a class="c-dropdown__item dropdown-item" href="https://www.cloudiplc.com/pages.php?page=dedicated">服务器租用</a>
+					</div>
+				</li>
+	            <li class="c-nav__item">
+	                <a class="c-nav__link" href="https://demo.neworld.org/datecenter/">数据中心</a>
+	            </li>
+	            <li class="c-nav__item">
+	                <a class="c-nav__link" href="https://demo.neworld.org/about/">技术支持</a>
+	            </li>
+	            <li class="c-nav__item">
+	                <a class="c-nav__link" href="https://demo.neworld.org/about/">关于我们</a>
+	            </li> -->
+	        </ul>
+	    
+	    		    <a class="u-ml-large c-btn c-btn--success" href="/clientarea.php">用户登录</a>
+			    </nav>
+	    <!-- // Navigation items  -->
+	    <button class="c-nav-toggle u-ml-auto" type="button" data-toggle="collapse" data-target="#main-nav">
+	        <span class="c-nav-toggle__bar"></span>
+	        <span class="c-nav-toggle__bar"></span>
+	        <span class="c-nav-toggle__bar"></span>
+	    </button><!-- // .c-nav-toggle -->
+	</div>
+</header>
+		                	<main>
+        			
+		
+	          
+	
+    
+    	
+
+
+<link rel="stylesheet" type="text/css" href="/templates/orderforms//style.css">
+<link href="/assets/css/icheck/square/blue.css" rel="stylesheet">
+<link href="/assets/css/icheck/square/green.css" rel="stylesheet">
+<script type="text/javascript" src="/assets/js/icheck.js"></script>
+<script type="text/javascript" src="/templates/orderforms//base.js"></script>
+
+<section class="order-error space2x">
+	<div class="container">
+		<div id="order-standard_cart">
+		
+		    <div class="row">
+		
+		        <div class="col-md-10 col-md-offset-1">
+		
+		            <div class="header-lined">
+		                <h1>
+		                    哎呀，此处出现了问题…
+		                </h1>
+		            </div>
+		
+		        </div>
+		
+		        <div class="col-md-10 col-md-offset-1">
+		
+		            <div class="categories-collapsed visible-xs visible-sm clearfix">
+
+    <div class="pull-left form-inline">
+        <form method="get" action="/cart.php">
+            <select name="gid" onchange="submit()" class="form-control select2-hidden-accessible" tabindex="-1" aria-hidden="true">
+                <optgroup label="Product Categories">
+                                            <option value="3">中国-泉州CN2 VPS</option>
+                                            <option value="14">出国-沪日IPLC NAT</option>
+                                            <option value="13">日本-东京大阪 服务器</option>
+                                            <option value="18">中国-香港 服务器</option>
+                                            <option value="5">美国-洛杉矶 服务器</option>
+                                            <option value="15">中国-大陆 服务器</option>
+                                    </optgroup>
+                <optgroup label="Actions">
+                                                                                <option value="viewcart">查看购物车</option>
+                </optgroup>
+            </select><span class="select2 select2-container select2-container--default" dir="ltr" style="width: 100%;"><span class="selection"><span class="select2-selection select2-selection--single" role="combobox" aria-haspopup="true" aria-expanded="false" tabindex="0" aria-labelledby="select2-gid-p8-container"><span class="select2-selection__rendered" id="select2-gid-p8-container" title="中国-泉州CN2 VPS">中国-泉州CN2 VPS</span><span class="select2-selection__arrow" role="presentation"><b role="presentation"></b></span></span></span><span class="dropdown-wrapper" aria-hidden="true"></span></span>
+        </form>
+    </div>
+
+    
+</div>
+		
+		            <div class="alert alert-danger error-heading">
+		                <i class="fa fa-warning"></i>
+		                缺货
+		            </div>
+		
+		            <div class="row">
+		                <div class="col-sm-8 col-sm-offset-2">
+		
+		                    <p class="margin-bottom">目前该项目缺货，所以订购已被暂停，直到重新补货。如果您要了解更多信息，请联系我们。</p>
+		
+		                    <div class="text-center">
+		                        <a href="javascript:history.go(-1)" class="btn btn-default">
+		                            <i class="fa fa-arrow-left"></i>&nbsp;
+		                            返回并重试
+		                        </a>
+		                    </div>
+		
+		                </div>
+		            </div>
+		
+		        </div>
+		    </div>
+		</div>
+	</div>
+</section>
+
+
+
+		</main>
+
+	<div class="footer space">
+		<div class="container">
+			<div class="row">
+				<div class="col-xs-12 col-sm-3">
+					<a class="navbar-brand" href="#">CloudIPLC</a>
+					<p>© 2026 CloudIPLC. 保留所有权利</p>
+				</div>
+				<!-- <div class="col-sm-2 hidden-xs">
+					<h4 class="title-head">关于我们</h4>
+					<ul class="list-unstyled">
+						<li><a href="#">Company</a></li>
+						<li><a href="#">Blog</a></li>
+						<li><a href="#">Affileates</a></li>
+						<li><a href="#">Press</a></li>
+						<li><a href="#">Terms</a></li>
+					</ul>
+				</div>
+				<div class="col-sm-2 hidden-xs">
+					<h4 class="title-head">产品中心</h4>
+					<ul class="list-unstyled">
+						<li><a href="#">Features</a></li>
+						<li><a href="#">How it Works</a></li>
+						<li><a href="#">Pricing</a></li>
+						<li><a href="#">Learn</a></li>
+						<li><a href="#">Privavy</a></li>
+					</ul>
+				</div>
+				<div class="col-sm-2 hidden-xs">
+					<h4 class="title-head">技术支持</h4>
+					<ul class="list-unstyled">
+						<li><a href="#">Documintation</a></li>
+						<li><a href="#">Delevopers API</a></li>
+						<li><a href="#">Learn</a></li>
+						<li><a href="#">FAQ</a></li>
+						<li><a href="#">Status</a></li>
+					</ul>
+				</div>
+				<div class="col-sm-2 hidden-xs">
+					<h4 class="title-head">了解更多</h4>
+					<ul class="list-unstyled">
+						<li><a href="#">Facebook</a></li>
+						<li><a href="#">Twitter</a></li>
+					</ul>
+				</div> -->
+			</div>
+		</div>
+	</div>
+	
+
+
+
+
+
+<script>
+/* 头像加载超时保护：3 秒未完成加载强制切换到 data-avatar-fallback 指定的本地图
+   防止 weavatar 等外部头像服务慢/挂时整页"loading"指示长时间不停 */
+(function () {
+    function setupAvatarTimeout(img) {
+        var fb = img.getAttribute('data-avatar-fallback');
+        if (!fb) return;
+        if (img.complete && img.naturalHeight > 0) return;
+        var timer = setTimeout(function () {
+            if (!img.complete || img.naturalHeight === 0) {
+                img.onerror = null;
+                img.src = fb;
+            }
+        }, 3000);
+        img.addEventListener('load', function () { clearTimeout(timer); });
+        img.addEventListener('error', function () { clearTimeout(timer); });
+    }
+    var imgs = document.querySelectorAll('img.avatar-with-timeout');
+    for (var i = 0; i < imgs.length; i++) setupAvatarTimeout(imgs[i]);
+})();
+</script>
+
+
+
+<div class="modal system-modal fade" id="modalAjax" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content panel panel-primary">
+            <div class="modal-header panel-heading">
+                <button type="button" class="close" data-dismiss="modal">
+                    <span aria-hidden="true">×</span>
+                    <span class="sr-only">Close</span>
+                </button>
+                <h4 class="modal-title">Title</h4>
+            </div>
+            <div class="modal-body panel-body">
+                Loading...
+            </div>
+            <div class="modal-footer panel-footer">
+                <div class="pull-left loader">
+                    <i class="fa fa-circle-o-notch fa-spin"></i> Loading...
+                </div>
+                <button type="button" class="btn btn-default" data-dismiss="modal">
+                    Close
+                </button>
+                <button type="button" class="btn btn-primary modal-submit">
+                    Submit
+                </button>
+            </div>
+        </div>
+    </div>
+</div></body></html>
