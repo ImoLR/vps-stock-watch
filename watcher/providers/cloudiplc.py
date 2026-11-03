@@ -95,6 +95,8 @@ class CloudiplcProvider(BaseProvider):
                 "CloudIPLC catalog found only %d products; expected at least %d"
                 % (len(products), minimum)
             )
+        for pid, product in self._direct_products().items():
+            products.setdefault(pid, product)
         result = [products[pid] for pid in sorted(products, key=int)]
         order_pages = self._apply_order_pages(result)
         self.last_scan_stats = {
@@ -180,7 +182,35 @@ class CloudiplcProvider(BaseProvider):
             },
         )
 
+    def _direct_products(self) -> Dict[str, Product]:
+        """Sale items reachable only by a direct order link (no group lists them).
+
+        Name and category come from config so they stay stable while the order
+        page is sold out or unchecked; price and stock come from the order page.
+        """
+        products = {}
+        for entry in self.config.get("direct_products") or []:
+            pid = str(entry["pid"])
+            products[pid] = Product(
+                provider=self.name,
+                product_id=pid,
+                name=str(entry.get("name") or "PID %s" % pid),
+                category=str(entry.get("category") or "活动直链"),
+                url=ORDER_URL % pid,
+                metadata={"direct_link": True},
+            )
+        return products
+
     def should_notify(self, change: Change) -> bool:
+        # A direct-link product's price exists only while its order page is
+        # open; it vanishes when sold out or unchecked, so only compare two
+        # buyable snapshots.
+        if (
+            change.type == ChangeType.PRICE
+            and change.product.metadata.get("direct_link")
+            and not (change.old is not None and change.old.available and change.product.available)
+        ):
+            return False
         # Order-page pricing first appears once a PID's order page has been read.
         if (
             change.type == ChangeType.PRICE
@@ -234,6 +264,10 @@ class CloudiplcProvider(BaseProvider):
                 key: order[key] for key in ("status", "total", "name") if order.get(key)
             }
             product.metadata["stock_source"] = "order_page"
+            if product.metadata.get("direct_link") and product.available:
+                # The default first payment, including required traffic tiers.
+                product.price = order.get("total")
+                product.billing_cycle = next(iter(product.pricing), None)
         return checked
 
     def _check_order_pages(self, pids: List[str]) -> Dict[str, Dict[str, Any]]:

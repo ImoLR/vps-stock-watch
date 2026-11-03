@@ -189,6 +189,11 @@ providers:
     order_page_check: true
     order_page_refresh_seconds: 7200
     order_page_retry_seconds: 1800
+    # Sale items only reachable by a direct order link; no category lists them.
+    direct_products:
+      - pid: 125
+        name: IPLC TY-NAT 限时限量 [双十一]
+        category: 活动直链
     scan_memory_high_mb: 600
     scan_memory_max_mb: 700
     browser_headless: false

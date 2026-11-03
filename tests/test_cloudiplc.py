@@ -15,6 +15,7 @@ CART = (FIXTURES / "cloudiplc_cart.html").read_text(encoding="utf-8")
 GID14 = (FIXTURES / "cloudiplc_gid14.html").read_text(encoding="utf-8")
 GID8 = (FIXTURES / "cloudiplc_gid8.html").read_text(encoding="utf-8")
 CONFPRODUCT = (FIXTURES / "cloudiplc_confproduct.html").read_text(encoding="utf-8")
+DIRECT_CONFPRODUCT = (FIXTURES / "cloudiplc_direct_confproduct.html").read_text(encoding="utf-8")
 OUT_OF_STOCK = (FIXTURES / "cloudiplc_out_of_stock.html").read_text(encoding="utf-8")
 CHALLENGE = (
     '<script>var _0x49a6=["EO_Bot_Ssid"];document.cookie="__tst_status="+1+"#;";'
@@ -96,6 +97,32 @@ class CloudiplcCatalogTests(unittest.TestCase):
         self.assertEqual(3, instance._sleep.call_count)
         self.assertTrue(all(call.args[0] >= 4 for call in instance._sleep.call_args_list))
 
+    def test_direct_products_join_catalog_without_extra_requests(self):
+        instance = provider(
+            minimum_products=1,
+            direct_products=[
+                {"pid": 125, "name": "限时限量", "category": "活动直链"},
+                {"pid": "116", "name": "listed anyway"},
+            ],
+        )
+        pages = {
+            "https://www.cloudiplc.com/cart.php": CART,
+            "https://www.cloudiplc.com/cart.php?gid=8": GID8,
+            "https://www.cloudiplc.com/cart.php?gid=13": GID8,
+            "https://www.cloudiplc.com/cart.php?gid=14": GID14,
+        }
+        instance.session.get = Mock(side_effect=lambda url, timeout: response(pages[url]))
+
+        products = {p.product_id: p for p in instance.fetch_products()}
+
+        self.assertEqual(4, instance.session.get.call_count)
+        direct = products["125"]
+        self.assertEqual("限时限量", direct.name)
+        self.assertEqual("活动直链", direct.category)
+        self.assertEqual("https://www.cloudiplc.com/cart.php?a=add&pid=125", direct.url)
+        self.assertIsNone(direct.available)
+        self.assertEqual("IPLC TY-NAT Rev2-1 [无退款]", products["116"].name)
+
     def test_edgeone_challenge_fails_without_retry(self):
         instance = provider(retry_attempts=3)
         instance.session.get = Mock(return_value=response(CHALLENGE))
@@ -127,6 +154,52 @@ class CloudiplcOrderPageTests(unittest.TestCase):
             },
             result["pricing"],
         )
+
+    def test_parses_real_direct_link_sale_page(self):
+        result = parse_order_page(
+            DIRECT_CONFPRODUCT, "https://www.cloudiplc.com/cart.php?a=confproduct&i=0"
+        )
+        self.assertEqual("available", result["status"])
+        self.assertEqual("IPLC TY-NAT 限时限量 [无退款]", result["name"])
+        self.assertEqual("￥779.99RMB", result["total"])
+        self.assertEqual(
+            {"semiannually": "￥59.99RMB 半年", "annually": "￥99.99RMB 每年"},
+            result["pricing"],
+        )
+
+    def test_direct_product_takes_price_from_order_page(self):
+        instance = provider(order_page_check=True)
+        instance._clock = lambda: 0.0
+        order = parse_order_page(
+            DIRECT_CONFPRODUCT, "https://www.cloudiplc.com/cart.php?a=confproduct&i=0"
+        )
+        with patch.object(CloudiplcProvider, "_check_order_pages", return_value={"125": order}):
+            products = [Product("cloudiplc", "125", "D", metadata={"direct_link": True})]
+            instance._apply_order_pages(products)
+        self.assertIs(True, products[0].available)
+        self.assertEqual("￥779.99RMB", products[0].price)
+        self.assertEqual("semiannually", products[0].billing_cycle)
+
+        instance._order_cache["125"] = (0.0, self._order("sold_out"))
+        products = [Product("cloudiplc", "125", "D", metadata={"direct_link": True})]
+        instance._apply_order_pages(products)
+        self.assertIs(False, products[0].available)
+        self.assertIsNone(products[0].price)
+
+    def test_direct_product_price_notifies_only_between_buyable_snapshots(self):
+        instance = provider()
+
+        def item(available, price):
+            return Product("cloudiplc", "125", "D", price=price, available=available,
+                           metadata={"direct_link": True})
+
+        def notifies(old, new):
+            return instance.should_notify(Change(ChangeType.PRICE, new, old, ["price"]))
+
+        self.assertFalse(notifies(item(True, "￥779.99RMB"), item(False, None)))
+        self.assertFalse(notifies(item(False, None), item(True, "￥779.99RMB")))
+        self.assertFalse(notifies(item(None, None), item(True, "￥779.99RMB")))
+        self.assertTrue(notifies(item(True, "￥779.99RMB"), item(True, "￥699.99RMB")))
 
     def test_parses_real_out_of_stock_page(self):
         result = parse_order_page(
