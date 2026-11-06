@@ -383,7 +383,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             LOG.error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
             return 2
         bot = BotClient(credentials["token"], credentials["chat_id"])
-    return asyncio.run(FacTelegramWatch(config, bot).run())
+    async def run() -> int:
+        # Build the client inside the running loop: Telethon (and asyncio.Lock
+        # on 3.9) bind to the loop current at construction time.
+        return await FacTelegramWatch(config, bot).run()
+
+    return asyncio.run(run())
 
 
 if __name__ == "__main__":
