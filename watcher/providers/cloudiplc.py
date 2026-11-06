@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import re
 import time
@@ -16,6 +17,10 @@ LOG = logging.getLogger(__name__)
 
 BASE_URL = "https://www.cloudiplc.com/"
 ORDER_URL = BASE_URL + "cart.php?a=add&pid=%s"
+FEED_URL = "feeds/productsinfo.php?pid=%s&get=name"
+FEED_BODY = re.compile(r"^\s*document\.write\('(?P<value>.*)'\);?\s*$", re.S)
+FEED_NOT_FOUND = "Product ID Not Found"
+HIDDEN_CATEGORY = "隐藏链接"
 GROUP_LINK = re.compile(r"""href=["']/?cart\.php\?gid=([0-9]+)["']""")
 EMPTY_GROUP_MARKER = "产品组不包含任何可见的产品"
 SOLD_OUT_MARKERS = ("缺货", "缺貨", "out of stock", "库存不足", "售罄")
@@ -45,6 +50,12 @@ class CloudiplcProvider(BaseProvider):
     order pages are opened in an isolated Chromium and cached for
     ``order_page_refresh_seconds``. New PIDs are checked on the scan that
     first sees them.
+
+    Hidden sale links (no group lists them) are found through the open
+    ``feeds/productsinfo.php``: every ``hidden_probe_every_rounds`` rounds it
+    asks for the ``hidden_probe_ahead`` PIDs just above the highest PID ever
+    seen (WHMCS IDs only grow). A PID the feed names but no group lists joins
+    the snapshot as a hidden direct link and stays there across restarts.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -52,6 +63,9 @@ class CloudiplcProvider(BaseProvider):
         self.session.headers["Accept-Language"] = "zh-CN,zh;q=0.9"
         self._order_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._order_failed_at: Optional[float] = None
+        self._hidden: Dict[str, Product] = {}
+        self._high_water = 0
+        self._rounds = 0
         self._last_request: Optional[float] = None
         self._clock: Callable[[], float] = time.monotonic
         self._sleep: Callable[[float], None] = time.sleep
@@ -97,12 +111,23 @@ class CloudiplcProvider(BaseProvider):
             )
         for pid, product in self._direct_products().items():
             products.setdefault(pid, product)
+        probed, found = self._probe_hidden(products)
+        requests_made += probed
+        for pid in list(self._hidden):
+            if pid in products:
+                # Listed in a group (or configured) now; no longer hidden.
+                self._hidden.pop(pid)
+            else:
+                products[pid] = self._hidden[pid]
+        self._rounds += 1
         result = [products[pid] for pid in sorted(products, key=int)]
         order_pages = self._apply_order_pages(result)
         self.last_scan_stats = {
             "groups": sorted(pages, key=int),
             "products": len(result),
             "requests": requests_made,
+            "high_water_pid": self._high_water,
+            "hidden_found": found,
             "order_pages_checked": order_pages,
             "duration_seconds": round(time.monotonic() - started, 3),
         }
@@ -201,7 +226,98 @@ class CloudiplcProvider(BaseProvider):
             )
         return products
 
+    def restore_state(self, provider_state: Dict[str, Any]) -> None:
+        pids = [int(provider_state.get("high_water_pid") or 0)]
+        for item in (provider_state.get("products") or {}).values():
+            product = Product.from_dict(item)
+            pids.append(int(product.product_id))
+            if product.metadata.get("hidden_direct_link"):
+                self._hidden[product.product_id] = product
+        self._high_water = max(pids)
+
+    def update_state_after_success(
+        self, provider_state: Dict[str, Any], products: List[Product]
+    ) -> None:
+        provider_state["high_water_pid"] = self._high_water
+
+    def _probe_hidden(self, products: Dict[str, Product]) -> Tuple[int, List[str]]:
+        """Ask the feed for PIDs above the highest seen; return (requests, hidden PIDs)."""
+        # The baseline covers PIDs that existed before probing began, so old
+        # hidden PIDs above the listed ones never alert as new.
+        baseline = int(self.config.get("hidden_probe_baseline_pid") or 0)
+        self._high_water = max([self._high_water, baseline] + [int(pid) for pid in products])
+        every = max(1, int(self.config.get("hidden_probe_every_rounds", 3)))
+        if not self.config.get("hidden_probe", False) or self._rounds % every:
+            return 0, []
+        base = self._high_water
+        requests_made = 0
+        found: List[str] = []
+        for pid in range(base + 1, base + 1 + max(1, int(self.config.get("hidden_probe_ahead", 3)))):
+            try:
+                name = self._feed_name(str(pid))
+            except FetchError as exc:
+                if exc.blocked:
+                    raise
+                LOG.warning("%s: hidden-link probe stopped: %s", self.name, exc)
+                break
+            except ParseError as exc:
+                LOG.warning("%s: hidden-link probe stopped: %s", self.name, exc)
+                break
+            finally:
+                requests_made += 1
+            if name is None:
+                continue
+            self._high_water = max(self._high_water, pid)
+            key = str(pid)
+            if key in products or key in self._hidden:
+                continue
+            LOG.info("%s: hidden PID %s found through the feed: %s", self.name, key, name)
+            self._hidden[key] = Product(
+                provider=self.name,
+                product_id=key,
+                name=name,
+                category=HIDDEN_CATEGORY,
+                url=ORDER_URL % key,
+                metadata={"hidden_direct_link": True, "found_at": int(time.time())},
+            )
+            found.append(key)
+        return requests_made, found
+
+    def _feed_name(self, pid: str) -> Optional[str]:
+        """A PID's name from the open WHMCS feed, or None if it does not exist."""
+        url = str(self.config.get("base_url", BASE_URL)) + FEED_URL % pid
+        self._space_requests()
+        self._last_request = self._clock()
+        try:
+            response = self.session.get(url, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise FetchError("request failed for %s (%s)" % (url, type(exc).__name__)) from None
+        text = response.text
+        if (
+            response.status_code in (403, 429)
+            or is_challenge_page(text)
+            or all(marker in text for marker in EDGEONE_CHALLENGE)
+        ):
+            raise FetchError(
+                "HTTP %s for %s (challenge/block page)" % (response.status_code, url),
+                response.status_code,
+                True,
+            )
+        if response.status_code >= 400:
+            raise FetchError("HTTP %s for %s" % (response.status_code, url), response.status_code)
+        match = FEED_BODY.match(text)
+        if not match:
+            raise ParseError("CloudIPLC feed reply is not document.write(): %r" % text[:120])
+        value = match.group("value").replace("\\'", "'").replace('\\"', '"')
+        value = " ".join(html.unescape(value).split())
+        if not value or value == FEED_NOT_FOUND:
+            return None
+        return value
+
     def should_notify(self, change: Change) -> bool:
+        # 2026-11-06 user: only new products and hidden links alert.
+        if self.config.get("notify_only_new") and change.type != ChangeType.NEW:
+            return False
         # A direct-link product's price exists only while its order page is
         # open; it vanishes when sold out or unchecked, so only compare two
         # buyable snapshots.

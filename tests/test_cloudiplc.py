@@ -289,3 +289,125 @@ class CloudiplcOrderPageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloudiplcHiddenLinkTests(unittest.TestCase):
+    PAGES = {
+        "https://www.cloudiplc.com/cart.php": CART,
+        "https://www.cloudiplc.com/cart.php?gid=8": GID8,
+        "https://www.cloudiplc.com/cart.php?gid=13": GID8,
+        "https://www.cloudiplc.com/cart.php?gid=14": GID14,
+    }
+
+    def _provider(self, feed, **overrides):
+        instance = provider(minimum_products=1, hidden_probe=True, hidden_probe_ahead=3, **overrides)
+
+        def get(url, timeout):
+            if "productsinfo.php" in url:
+                pid = url.split("pid=")[1].split("&")[0]
+                reply = feed.get(pid, "Product ID Not Found")
+                if isinstance(reply, int):
+                    return response("blocked", reply)
+                return response("document.write('%s');" % reply)
+            return response(self.PAGES[url])
+
+        instance.session.get = Mock(side_effect=get)
+        return instance
+
+    def _feed_urls(self, instance):
+        return [
+            call.args[0].split("pid=")[1].split("&")[0]
+            for call in instance.session.get.call_args_list
+            if "productsinfo.php" in call.args[0]
+        ]
+
+    def test_probe_above_highest_pid_adds_unlisted_pid_as_hidden_link(self):
+        instance = self._provider({"121": "双十二 IPLC 限时 &amp; 限量"})
+
+        products = {p.product_id: p for p in instance.fetch_products()}
+
+        self.assertEqual(["120", "121", "122"], self._feed_urls(instance))
+        hidden = products["121"]
+        self.assertEqual("双十二 IPLC 限时 & 限量", hidden.name)
+        self.assertEqual("隐藏链接", hidden.category)
+        self.assertEqual("https://www.cloudiplc.com/cart.php?a=add&pid=121", hidden.url)
+        self.assertTrue(hidden.metadata["hidden_direct_link"])
+        self.assertEqual(121, instance._high_water)
+        self.assertEqual(["121"], instance.last_scan_stats["hidden_found"])
+        self.assertEqual(7, instance.last_scan_stats["requests"])
+
+    def test_probe_starts_above_baseline_pid(self):
+        instance = self._provider({"150": "old", "161": "new"}, hidden_probe_baseline_pid=160)
+
+        products = {p.product_id for p in instance.fetch_products()}
+
+        self.assertEqual(["161", "162", "163"], self._feed_urls(instance))
+        self.assertNotIn("150", products)
+        self.assertIn("161", products)
+        self.assertEqual(161, instance._high_water)
+
+    def test_probe_runs_every_n_rounds_and_keeps_hidden_links(self):
+        instance = self._provider({"120": "test"}, hidden_probe_every_rounds=3)
+
+        rounds = [{p.product_id for p in instance.fetch_products()} for _ in range(4)]
+
+        self.assertTrue(all("120" in pids for pids in rounds))
+        self.assertEqual(["120", "121", "122", "121", "122", "123"], self._feed_urls(instance))
+
+    def test_hidden_link_listed_later_is_no_longer_hidden(self):
+        instance = self._provider({})
+        instance._hidden["116"] = Product("cloudiplc", "116", "x", metadata={"hidden_direct_link": True})
+
+        products = {p.product_id: p for p in instance.fetch_products()}
+
+        self.assertNotIn("hidden_direct_link", products["116"].metadata)
+        self.assertEqual({}, instance._hidden)
+
+    def test_blocked_feed_fails_the_scan(self):
+        instance = self._provider({"120": 403})
+        with self.assertRaises(FetchError) as caught:
+            instance.fetch_products()
+        self.assertTrue(caught.exception.blocked)
+        self.assertEqual(["120"], self._feed_urls(instance))
+
+    def test_broken_feed_reply_stops_probe_but_keeps_catalog(self):
+        instance = self._provider({})
+        get = instance.session.get.side_effect
+        instance.session.get = Mock(
+            side_effect=lambda url, timeout: response("<html>oops</html>")
+            if "productsinfo.php" in url
+            else get(url, timeout)
+        )
+
+        products = instance.fetch_products()
+
+        self.assertEqual(8, len(products))
+        self.assertEqual(["120"], self._feed_urls(instance))
+
+    def test_restore_state_keeps_hidden_links_and_high_water(self):
+        instance = provider(hidden_probe=True)
+        hidden = Product("cloudiplc", "150", "sale", metadata={"hidden_direct_link": True})
+        instance.restore_state(
+            {
+                "high_water_pid": 152,
+                "products": {
+                    "cloudiplc:147": Product("cloudiplc", "147", "PCCW").to_dict(),
+                    "cloudiplc:150": hidden.to_dict(),
+                },
+            }
+        )
+        self.assertEqual(152, instance._high_water)
+        self.assertEqual(["150"], list(instance._hidden))
+        state = {}
+        instance.update_state_after_success(state, [])
+        self.assertEqual({"high_water_pid": 152}, state)
+
+    def test_notify_only_new(self):
+        instance = provider(notify_only_new=True)
+        product = Product("cloudiplc", "150", "sale", metadata={"hidden_direct_link": True})
+        old = Product("cloudiplc", "150", "test", available=False)
+
+        self.assertTrue(instance.should_notify(Change(ChangeType.NEW, product)))
+        for kind in (ChangeType.RESTOCK, ChangeType.SOLD_OUT, ChangeType.PRICE,
+                     ChangeType.NAME, ChangeType.REMOVED):
+            self.assertFalse(instance.should_notify(Change(kind, product, old, [])))

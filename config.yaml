@@ -93,9 +93,10 @@ providers:
     # cart.php?a=add&pid=... request per DMIT check, so keep this list short.
     extra_pids: []
 
+  # Disabled 2026-11-06 at the user's request; code kept for a later rerun.
   - name: blossom
     type: blossom
-    enabled: true
+    enabled: false
     catalog_url: https://blossomhost.us/api/catalog
     interval_seconds: 60
     timeout_seconds: 25
@@ -172,9 +173,11 @@ providers:
     order_page_refresh_seconds: 1800
 
   # CloudIPLC (云际互联): WHMCS category pages over HTTP every 5 min (~7
-  # requests, 5 s apart). Stock only shows on cart.php?a=add, which EdgeOne
-  # guards with a JS check, so those pages open in an isolated Chromium every
-  # 2 h (new PIDs on first sight). Never retried on a block page.
+  # requests, 5 s apart). New products and hidden links only (user,
+  # 2026-11-06): every 3rd round (15 min) the open productsinfo feed probes
+  # the 3 PIDs above the highest seen; one no group lists is a hidden direct
+  # link. Stock lives only on the EdgeOne-guarded cart.php?a=add (isolated
+  # Chromium), so that check is off. Never retried on a block page.
   - name: cloudiplc
     type: cloudiplc
     enabled: true
@@ -186,7 +189,14 @@ providers:
     max_categories: 40
     minimum_products: 10
     max_backoff_seconds: 3600
-    order_page_check: true
+    notify_only_new: true
+    hidden_probe: true
+    hidden_probe_every_rounds: 3
+    hidden_probe_ahead: 3
+    # Highest PID on 2026-11-06 (160 "IPLC TY-NAT 双12活动款"); 148-160 are
+    # older hidden or retired items and must not alert as new.
+    hidden_probe_baseline_pid: 160
+    order_page_check: false
     order_page_refresh_seconds: 7200
     order_page_retry_seconds: 1800
     # Sale items only reachable by a direct order link; no category lists them.

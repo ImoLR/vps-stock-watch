@@ -60,6 +60,10 @@ HTTP，遇到 403/429/挑战页才启动 Playwright。2026-09-07 的真实验证
 
 ### Blossom Host
 
+**2026-11-06 起停用**：用户要求移除 Blossom 监控，`config.yaml` 里 `enabled: false`。
+Provider 代码、测试和下面的说明都保留；要恢复时改回 `enabled: true` 并重启服务即可
+（state 里旧的 TG 间隔覆盖 `settings.provider_intervals.blossom` 会继续生效）。
+
 真实检查了首页、`app.js`、浏览器打开 `#/buy/isp-xs` 时的 Fetch/XHR，以及购买页使用的
 公开同源 JSON：
 
@@ -272,6 +276,25 @@ IPLC 独服，以及日本、香港、洛杉矶、大陆独服。
   有货时才推送价格变化。pid 125 在 2026-11-03：半年 ¥59.99 / 年 ¥99.99 基础价，必选流量
   200GB 半年 ¥720（500GB ¥2100、1000G ¥4500），无初装费，默认首付 ¥779.99/半年。
   活动结束后从配置里删掉即可（会发一条“下架”）。
+
+- **2026-11-06 起只报新品和隐藏链接**（`notify_only_new: true`）：分类里出现新 PID、或者 feed
+  探到不在任何分组里的新 PID，才推送；补货、售罄、价格、名称、下架都只写 state 不推送。库存
+  不再需要，所以 Chromium 下单页检查关掉了（`order_page_check: false`，代码保留）。
+- **隐藏链接**：公开 feed `feeds/productsinfo.php?pid=N&get=name` 没被 EdgeOne 拦，对任意 PID
+  返回 `document.write('名称')`，不存在返回 `Product ID Not Found`（2026-11-06 验证，pid 125
+  双十一直链也能查到）。每 `hidden_probe_every_rounds`（3）轮 = 15 分钟，探测历史最大 PID
+  之上 `hidden_probe_ahead`（3）个号（WHMCS PID 只增不减；最大值存 state 的
+  `high_water_pid`）。查到名称、但分类里没有的 PID 记为隐藏链接（`category: 隐藏链接`、
+  `metadata.hidden_direct_link`），推送“🕵️ 发现隐藏新品”，之后一直留在快照里（重启后从 state
+  恢复）；它以后挂进分组就按普通商品处理。feed 被 403/429/校验页拦时整轮失败、走退避；回复
+  格式不对只停掉本轮探测，不影响分类扫描。约 2.3k 请求/天。
+- 2026-11-06 一次性查过 100–170 之间分类里没有的 PID（5 秒一个）：最大 PID 是 160，161–170
+  都不存在。大多是停运或旧款（如 120–123 “[已停运] IPLC SH-NAT”、148/150–153 往年节日限量
+  “[停运] HK-CMI KVM …”）。也有没标停运的未上架号：131 徐州高防独服、132–137 HK-CMI KVM、
+  139 “USA-laxA KVM 限量活动”、140/141 HK-CN2 AntiDDOS VDS、144 CN-XZ BGP VDS、146 泉州
+  高防独服、149 上海电信 CN2 独服、154/155 CN-QZ CN2 50M/100M、159 “IPLC TY-NAT 9周年”、
+  **160 “IPLC TY-NAT 双12活动款”**（像是提前建好的双十二直链）。feed 只给名称，看不出能不能
+  下单。`hidden_probe_baseline_pid: 160` 让这些老号不当新品报，探测从 161 开始。
 
 ### HighEndNetwork（HEN）
 
