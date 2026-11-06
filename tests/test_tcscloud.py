@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from watcher.diff import compare_products
-from watcher.models import Change, ChangeType
+from watcher.models import Change, ChangeType, Product
 from watcher.providers import build_provider
 from watcher.providers.base import FetchError, ParseError
 from watcher.telegram import format_change
@@ -547,6 +547,43 @@ class ScanTests(unittest.TestCase):
         message = format_change(details[0], [])
         self.assertIn("商品信息变化", message)
         self.assertIn("1.5 GB → 2 GB", message)
+
+    def test_watched_only_reads_two_categories_and_keeps_only_seednet(self):
+        feed = self.feed()
+        feed[105] = ("SEEDNET-DYN-300M", {})
+        feed[109] = ("TPE-P1 B", {})
+        feed[116] = ("TPE-P Lite", {})
+        site = FakeSite(feed, retired={105, 107})
+        watcher = self.seednet_only(
+            site,
+            categories=["taiwan-vps-dynamic", "taiwan-vps-fixed"],
+            watched_only=True,
+            watch_new_pids=False,
+            minimum_categories=2,
+            feed_start_pid=104,
+        )
+        before = watcher.fetch_products()
+        self.assertEqual({"105", "111", "112"}, set(by_id(before)))
+        pages = [url for url, _ in site.calls if "rp=/store/" in url]
+        self.assertEqual(
+            [BASE + "index.php?rp=/store/taiwan-vps-dynamic", BASE + "index.php?rp=/store/taiwan-vps-fixed"],
+            pages,
+        )
+        self.assertNotIn(BASE + "cart.php?a=add&pid=109", site.order_calls())
+        # A new non-SeedNet PID is not reported; a new SeedNet one is.
+        site.feed[120] = ("DH9-HINET-PROMO", {})
+        site.feed[121] = ("DS9-SEEDNET-PROMO", {"annually": "$99.00 USD"})
+        site.calls.clear()
+        after = watcher.fetch_products()
+        sent = [
+            (c.product.product_id, c.type) for c in compare_products(before, after)
+            if watcher.should_notify(c)
+        ]
+        self.assertEqual([("121", ChangeType.NEW)], sent)
+        self.assertNotIn(BASE + "cart.php?a=add&pid=120", site.order_calls())
+        # Dropping an old non-SeedNet product from the snapshot is silent.
+        old = Product(provider="tcscloud", product_id="110", name="DH2", metadata={"stock_watched": False})
+        self.assertFalse(watcher.should_notify(Change(ChangeType.REMOVED, old, old)))
 
     def test_first_order_page_prices_do_not_alert(self):
         site = FakeSite(self.feed(), orderable={109})

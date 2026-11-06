@@ -350,6 +350,14 @@ Provider（`type: highend`），2026-11-06 用户定的规则：
     读一次价格和描述，所以缺货的活动款推送里也有价格和规格。首次运行从 `feed_start_pid`（80）
     往上走到店面最大 PID 之后连续 20 个空号，并把所有下单页查一遍作为基线。
   - `ignore_pids: [24, 89, 90]`：不是 VPS 的附加服务，不监控。
+- **现在只查 SeedNet，其他一律不查（2026-11-06 22:4x 用户要求，`watched_only: true`）**：只读
+  `categories: [taiwan-vps-dynamic, taiwan-vps-fixed]` 两个分类页（SeedNet 只在这两个里），
+  快照里只留 SeedNet（在售 111 DS1-SEEDNET-300M、112 FS1-SEEDNET-600M，已下架 81/87/95/105/106）。
+  SeedNet 的上新、下架、店面上下架、补货、售罄、库存数、改价（卡片起价每 5 分钟，各周期 feed
+  总价每小时）、改名、规格/描述变化全部推送；其他运营商的商品连新品和下架也不推、不查下单页
+  （`watch_new_pids: false`）。feed 探测仍每 2 轮看一次新 PID，只为发现**新的 SeedNet**（含只发
+  直链的活动款）；非 SeedNet 的 PID 只记在内部名单里，不会被当成新品。约 1.5k 请求/天。
+  下面几条是这之前的过程记录。
 - **只盯 SeedNet（2026-11-06 用户要求）**：`stock_watch_keywords: [seednet, seed-, fet-, -fet]`
   （SeedNet 即遠傳 FET，在名称、描述或店面链接里匹配）。只有这些商品推送补货/售罄/库存数/改价/
   改名，也只有它们查下单页（在售的 111 DS1-SEEDNET-300M、112 FS1-SEEDNET-600M，以及 retired 的

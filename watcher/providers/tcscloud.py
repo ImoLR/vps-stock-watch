@@ -337,6 +337,11 @@ class TcscloudProvider(BaseProvider):
     def should_notify(self, change: Change) -> bool:
         # New PIDs, removals and store-front moves are always reported; stock,
         # price and name changes only for watched products (SeedNet).
+        watched = change.product.metadata.get("stock_watched", True) or (
+            change.old is not None and change.old.metadata.get("stock_watched") is True
+        )
+        if self.config.get("watched_only") and not watched:
+            return False
         if change.type in (ChangeType.NEW, ChangeType.REMOVED):
             return super().should_notify(change)
         if not (
@@ -413,6 +418,11 @@ class TcscloudProvider(BaseProvider):
                 if pid in products:
                     products[pid].metadata["found_after_baseline"] = int(self._now())
                     products[pid].metadata["stock_watched"] = True
+        if self.config.get("watched_only"):
+            # 2026-11-06 user: only SeedNet at all. Other PIDs stay in the
+            # internal feed list (so they are never "new" again) but are not
+            # checked, kept in the snapshot or reported.
+            products = {pid: p for pid, p in products.items() if p.metadata["stock_watched"]}
 
         checked = self._order_checks(products, new_pids, visible, hidden_groups, feed_round)
         self._feed_details(products, new_pids)
@@ -420,7 +430,8 @@ class TcscloudProvider(BaseProvider):
 
         result = [products[pid] for pid in sorted(products, key=int)]
         minimum = max(1, int(self.config.get("minimum_products", 1)))
-        if sum(1 for p in result if p.metadata.get("category_visible")) < minimum:
+        shown = sum(1 for item in listed.values() if item["category_slug"] in visible)
+        if shown < minimum:
             raise ParseError(
                 "TCSCloud store listed fewer than %d products; refusing the snapshot" % minimum
             )
@@ -453,16 +464,20 @@ class TcscloudProvider(BaseProvider):
     def _read_categories(
         self, hidden_groups: Set[str]
     ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str], Set[str]]:
-        """Read every category in the store menu, then the hidden groups.
+        """Read every category in the store menu (or the configured
+        ``categories``), then the hidden groups.
 
         Returns (cards by PID, slug -> label, slugs the menu shows). A hidden
         group (configured ``extra_categories`` or learned from an order-page
         redirect, e.g. ``legacy``) that stops parsing is dropped, not fatal.
         """
         start = str(self.config.get("start_category", START_CATEGORY))
+        # A fixed list (``categories``) reads only those pages; the menu is
+        # still parsed so hidden groups are told apart.
+        fixed = [str(slug) for slug in self.config.get("categories") or []]
         labels: Dict[str, str] = {}
         visible: Set[str] = set()
-        pending = [start]
+        pending = list(fixed) or [start]
         done: Set[str] = set()
         listed: Dict[str, Dict[str, Any]] = {}
         maximum = max(1, int(self.config.get("max_categories", 30)))
@@ -478,7 +493,7 @@ class TcscloudProvider(BaseProvider):
                 visible.add(route)
                 if label and not labels.get(route):
                     labels[route] = label
-                if route not in done and route not in pending:
+                if not fixed and route not in done and route not in pending:
                     pending.append(route)
             self._add_cards(listed, cards, slug)
         minimum = max(1, int(self.config.get("minimum_categories", 1)))

@@ -238,14 +238,16 @@ providers:
 
   # TCSCloud (Taipei home-broadband VPS): category cards carry "N 可用"; hidden
   # and direct-link PIDs come from the productsinfo feed and their order pages.
-  # ~2k requests/day: 4 categories every round (SeedNet card stock + price
-  # every 5 min), feed probes every 2nd round, hourly SeedNet feed prices and
-  # retired-SeedNet order pages, new hidden PIDs' order page every round.
+  # SeedNet only. ~1.5k requests/day: 2 categories every round (SeedNet card
+  # stock + price every 5 min), feed probes every 2nd round (a new SeedNet PID
+  # anywhere), hourly SeedNet feed prices and retired-SeedNet order pages.
   - name: tcscloud
     type: tcscloud
     enabled: true
     base_url: https://billing.tcscloud.net/
     start_category: taiwan-vps-dynamic
+    # SeedNet only lives in these two; Premium / ECO pages are not read.
+    categories: [taiwan-vps-dynamic, taiwan-vps-fixed]
     currency_id: 1
     interval_seconds: 300
     timeout_seconds: 20
@@ -275,11 +277,14 @@ providers:
     stock_watch_keywords: [seednet, seed-, fet-, -fet]
     # A PID created after the baseline (possible pre-made sale link) is watched
     # too, whatever the ISP, so its opening alerts.
-    watch_new_pids: true
+    watch_new_pids: false
+    # 2026-11-06 22:4x user: "只查 SeedNet，其他全部不查" — non-SeedNet PIDs are
+    # not checked, kept or reported at all (not even new / removed).
+    watched_only: true
     # The hidden "legacy" group holds only HiNet/KBT items; its PIDs stay
     # tracked through the feed.
     read_hidden_groups: false
-    minimum_categories: 4
+    minimum_categories: 2
     minimum_products: 5
     stock_count_alerts: true
     max_backoff_seconds: 3600
