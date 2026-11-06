@@ -310,6 +310,48 @@ Provider（`type: highend`）因此只报 **新 PID / 改名 / 改价 / 下架**
 - 目录缓存在内存里，重启时通过 `restore_state` 从 state.json 恢复（含 `high_water_pid`），
   不会重新从 pid 1 扫起。基线后第一次补上价格不推送“价格变化”。
 
+### TCSCloud
+
+2026-11-06 接入。`https://billing.tcscloud.net/` 是 WHMCS 标准 `standard_cart` 模板，nginx 直出，
+**没有 Cloudflare / 挑战页**。只卖台北机房 VPS（HiNet / SeedNet / APTG 家宽动态/固定 IP，
+以及 Taipei Premium/ECO 机房款），全部算台湾区（`focus_regions: [TW]`；名称里出现 HK/JP/SG/US
+等字样才会被归到别的地区并忽略）。需要实名 KYC。
+
+- **分类页带真实库存**：侧栏列出 4 个分类（`taiwan-vps-dynamic`、`taiwan-vps-fixed`、
+  `taipei-premium`、`taipei-eco`），每轮全部读取，新分类会自动加入。卡片 `div.product#productN`
+  里的 `.qty` 是 `N 可用`（0 也照样显示），`.price` 是起价，`從開始` 表示有多个付款周期，
+  描述是 `CPU | 2 vCore` 这种行。Taipei Premium 没开库存跟踪，没有 `.qty`；Taipei ECO 当前是
+  “產品群組不包含任何可見的產品”，属正常空分类。2026-11-06：DH2-HINET-1000M（pid 110）9 台、
+  FH2-HINET-2000M（115）1 台，其余家宽款都是 0。
+- **下单页**（`cart.php?a=add&pid=N`，每次用新的 WHMCS session，不往同一个购物车里堆）：
+  有货 → `a=confproduct`，付款周期下拉框是“`12 個月價格 - $50.00 USD`”，这是**按月折算**价，
+  不是总价；没有可选项的商品（TPE-P Lite）直接进 `a=view` 购物车，也算有货；缺货 →
+  该商品自己的店面地址 `/store/<分组>/<商品>` 上显示“缺貨中”；**已下架（retired）** → 跳回店面
+  首页分类。`stock_source: order_page` 的商品（没库存数的 Premium、未上架商品）每 1800 秒查一次，
+  retired 的每 6 小时查一次（复活会推送“补货”），有库存数的只在有货时每 6 小时查一次各周期价格。
+- **隐藏商品 / 活动直链**：和 HighEnd 一样，`feeds/productsinfo.php?pid=N&get=name|price|description`
+  公开，隐藏商品也有名字。2026-11-06 慢扫 pid 1–170（5 秒一个，约 14 分钟）：店面 10 个
+  （108–112、114–117），另有 26 个不在店面：
+  - 已下架 20 个：24（TCP-BBR Managed Service）、81–87、95–107（老款 HINET/SEEDNET/TFN/APTG 等）。
+  - 还能下单但不在店面 6 个，当时全部缺货：113 `DT1-TFN-20M DYN`、119 `DA1-APTG-40M DYN`
+    （都属于动态分组但隐藏）、
+    89 TWNIC IP 租用、90 独服/托管（都在固定 IP 分组里隐藏），以及隐藏分组 **`legacy`** 里的
+    88 `HINET-FIX-600M`、94 `KBT-FIX-2.5G`（都是 $120/月）。`/store/legacy` 直接打开就有卡片和库存数。
+  - 缺货页地址会暴露分组名；不在侧栏里的分组（如 `legacy`）自动记为隐藏分组，之后每轮跟普通
+    分类一起读（`extra_categories` 可以手动加）。隐藏分组打不开或被删掉就丢弃，不影响整轮。
+  - 每 `feed_every_rounds`（3）轮：探测历史最大 PID 之上 `probe_ahead`（2）个号 + 一个远端号，
+    再复查一个未上架商品的名称（连续两次查不到才算下架）。新 PID 当轮就查下单页，没下架的再从 feed
+    读一次价格和描述，所以缺货的活动款推送里也有价格和规格。首次运行从 `feed_start_pid`（80）
+    往上走到店面最大 PID 之后连续 20 个空号，并把所有下单页查一遍作为基线。
+  - `ignore_pids: [24, 89, 90]`：不是 VPS 的附加服务，不监控。
+- **频率**：每 300 秒一轮，请求之间 5 秒。每轮 5 个分类页（含 `legacy`），feed 轮另加约 4 个，
+  下单页按上面的周期轮换（每轮最多 `order_check_batch` 2 个），合计约 2k 请求/天。
+  403/429/挑战页立即失败、不在本轮重试，由调度器退避（最长 3600 秒）；任何请求失败整轮作废，
+  不改缓存。状态（`high_water_pid`、未上架名单、隐藏分组）存在 state.json 的 `tcscloud` 下，
+  重启通过 `restore_state` 恢复，不会重扫。
+- 推送：新品、补货、售罄、库存数变化（`stock_count_alerts: true`，嫌吵可以关）、改价、改名、下架。
+  隐藏分组和未上架商品在 `/stock` 里归入“隐藏库存”。
+
 ### Misaka
 
 Misaka 的控制台是 Vite SPA；前端 API client 公开调用

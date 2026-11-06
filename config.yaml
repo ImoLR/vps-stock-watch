@@ -228,6 +228,40 @@ providers:
     minimum_products: 10
     max_backoff_seconds: 3600
 
+  # TCSCloud (Taipei home-broadband VPS): category cards carry "N 可用"; hidden
+  # and direct-link PIDs come from the productsinfo feed and their order pages.
+  # ~2k requests/day: 4 categories + hidden groups every round, feed probes
+  # every 3rd round, order pages for untracked/hidden PIDs every 30 min.
+  - name: tcscloud
+    type: tcscloud
+    enabled: true
+    base_url: https://billing.tcscloud.net/
+    start_category: taiwan-vps-dynamic
+    currency_id: 1
+    interval_seconds: 300
+    timeout_seconds: 20
+    request_spacing_seconds: 5
+    retry_attempts: 2
+    focus_regions:
+      - TW
+    # 2026-11-06 scan: pid 1-80 empty except 24 (TCP-BBR add-on), 120-170 empty.
+    feed_start_pid: 80
+    discovery_misses: 20
+    feed_every_rounds: 3
+    probe_ahead: 2
+    far_probe_span: 10
+    name_batch: 1
+    order_check_batch: 2
+    order_check_seconds: 1800
+    retired_check_seconds: 21600
+    price_refresh_seconds: 21600
+    # Not VPS: 24 TCP-BBR add-on, 89 TWNIC IP rental, 90 dedicated/colocation.
+    ignore_pids: [24, 89, 90]
+    minimum_categories: 4
+    minimum_products: 5
+    stock_count_alerts: true
+    max_backoff_seconds: 3600
+
   - name: misaka
     type: misaka
     enabled: true

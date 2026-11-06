@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>購物車 - TCSCloud</title>
+    <!-- Styling -->
+<link href="/assets/fonts/css/open-sans-family.css" rel="stylesheet" type="text/css" />
+<link href="/templates/twenty-one/css/all.min.css?v=3deca3" rel="stylesheet">
+<link href="/templates/twenty-one/css/theme.min.css?v=3deca3" rel="stylesheet">
+<link href="/assets/fonts/css/fontawesome.min.css" rel="stylesheet">
+<link href="/assets/fonts/css/fontawesome-solid.min.css" rel="stylesheet">
+<link href="/assets/fonts/css/fontawesome-regular.min.css" rel="stylesheet">
+<link href="/assets/fonts/css/fontawesome-light.min.css" rel="stylesheet">
+<link href="/assets/fonts/css/fontawesome-brands.min.css" rel="stylesheet">
+<link href="/assets/fonts/css/fontawesome-duotone.min.css" rel="stylesheet">
+<link href="/templates/twenty-one/css/custom.css" rel="stylesheet">
+
+<script>
+    var csrfToken = 'x',
+        markdownGuide = '降價指南',
+        locale = 'en',
+        saved = '保存',
+        saving = '自動保存',
+        whmcsBaseUrl = "";
+    </script>
+<script src="/templates/twenty-one/js/scripts.min.js?v=3deca3"></script>
+
+    
+</head>
+<body class="primary-bg-color" data-phone-cc-input="1">
+        
+
+    <header id="header" class="header">
+        
+        <div class="navbar navbar-light">
+            <div class="container">
+                <a class="navbar-brand mr-3" href="/index.php">
+                                            <img src="/assets/img/logo.png" alt="TCSCloud" class="logo-img">
+                                    </a>
+
+                <form method="post" action="/index.php?rp=/knowledgebase/search" class="form-inline ml-auto">
+<input type="hidden" name="token" value="x" />
+                    <div class="input-group search d-none d-xl-flex">
+                        <div class="input-group-prepend">
+                            <button class="btn btn-default" type="submit">
+                                <i class="fas fa-search"></i>
+                            </button>
+                        </div>
+                        <input class="form-control appended-form-control font-weight-light" type="text" name="search" placeholder="搜尋我們的知識庫...">
+                    </div>
+                </form>
+
+                <ul class="navbar-nav toolbar">
+                    <li class="nav-item ml-3">
+                        <a class="btn nav-link cart-btn" href="/cart.php?a=view">
+                            <i class="far fa-shopping-cart fa-fw"></i>
+                            <span id="cartItemCount" class="badge badge-info">0</span>
+                            <span class="sr-only">購物車</span>
+                        </a>
+                    </li>
+                    <li class="nav-item ml-3 d-xl-none">
+                        <button class="btn nav-link" type="button" data-toggle="collapse" data-target="#mainNavbar">
+                            <span class="fas fa-bars fa-fw"></span>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+        <div class="navbar navbar-expand-xl main-navbar-wrapper">
+            <div class="container">
+                <div class="collapse navbar-collapse" id="mainNavbar">
+                    <form method="post" action="/index.php?rp=/knowledgebase/search" class="d-xl-none">
+<input type="hidden" name="token" value="x" />
+                        <div class="input-group search w-100 mb-2">
+                            <div class="input-group-prepend">
+                                <button class="btn btn-default" type="submit">
+                                    <i class="fas fa-search"></i>
+                                </button>
+                            </div>
+                            <input class="form-control prepended-form-control" type="text" name="search" placeholder="搜尋我們的知識庫...">
+                        </div>
+                    </form>
+                    <ul id="nav" class="navbar-nav mr-auto">
+                            <li menuItemName="Home" class="d-block no-collapse" id="Primary_Navbar-Home">
+        <a class="pr-4" href="/index.php">
+                        首頁
+                    </a>
+            </li>
+    <li menuItemName="Store" class="d-block dropdown no-collapse" id="Primary_Navbar-Store">
+        <a class="pr-4 dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" href="#">
+                        商店
+                    </a>
+                    <ul class="dropdown-menu">
+                                                <li menuItemName="Browse Products Services" class="dropdown-item" id="Primary_Navbar-Store-Browse_Products_Services">
+                        <a href="/index.php?rp=/store" class="dropdown-item px-2 py-0">
+                                                        瀏覽全部
+                                                    </a>
+                    </li>
+                                                                <div class="dropdown-divider"></div>
+                                                                <li menuItemName="台灣VPS - 動態IP" class="dropdown-item" id="Primary_Navbar-Store-台灣VPS_-_動態IP">
+                        <a href="/index.php?rp=/store/taiwan-vps-dynamic" class="dropdown-item px-2 py-0">
+                                                        台灣VPS - 動態IP
+                                                    </a>
+                    </li>
+                                                                <li menuItemName="台灣VPS - 固定IP" class="dropdown-item" id="Primary_Navbar-Store-台灣VPS_-_固定IP">
+                        <a href="/index.php?rp=/store/taiwan-vps-fixed" class="dropdown-item px-2 py-0">
+                                                        台灣VPS - 固定IP
+                                                    </a>
+                    </li>
+                                                                <li menuItemName="Taipei Premium" class="dropdown-item" id="Primary_Navbar-Store-Taipei_Premium">
+                        <a href="/index.php?rp=/store/taipei-premium" class="dropdown-item px-2 py-0">
+                                                        Taipei Premium
+                                                    </a>
+                    </li>
+                                                                <li menuItemName="Taipei ECO" class="dropdown-item" id="Primary_Navbar-Store-Taipei_ECO">
+                        <a href="/index.php?rp=/store/taipei-eco" class="dropdown-item px-2 py-0">
+                                                        Taipei ECO
+                                                    </a>
+                    </li>
+                                        </ul>
+            </li>
+    <li menuItemName="Announcements" class="d-block" id="Primary_Navbar-Announcements">
+        <a class="pr-4" href="/index.php?rp=/announcements">
+                        公告
+                    </a>
+            </li>
+    <li menuItemName="Knowledgebase" class="d-block" id="Primary_Navbar-Knowledgebase">
+        <a class="pr-4" href="/index.php?rp=/knowledgebase">
+                        知識庫
+                    </a>
+            </li>
+    <li menuItemName="Network Status" class="d-block" id="Primary_Navbar-Network_Status">
+        <a class="pr-4" href="/serverstatus.php">
+                        服務狀態
+                    </a>
+            </li>
+    <li menuItemName="Contact Us" class="d-block" id="Primary_Navbar-Contact_Us">
+        <a class="pr-4" href="/contact.php">
+                        聯絡我們
+                    </a>
+            </li>
+    <li class="d-none dropdown collapsable-dropdown">
+        <a class="dropdown-toggle" href="#" id="navbarDropdownMenu" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+            更多
+        </a>
+        <ul class="collapsable-dropdown-menu dropdown-menu" aria-labelledby="navbarDropdownMenu">
+        </ul>
+    </li>
+                    </ul>
+                    <ul class="navbar-nav ml-auto">
+                            <li menuItemName="Account" class="d-block no-collapse dropdown no-collapse" id="Secondary_Navbar-Account">
+        <a class=" dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" href="#">
+                        帳戶
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-right">
+                                                <li menuItemName="Login" class="dropdown-item" id="Secondary_Navbar-Account-Login">
+                        <a href="/clientarea.php" class="dropdown-item px-2 py-0">
+                                                        登入
+                                                    </a>
+                    </li>
+                                                                <div class="dropdown-divider"></div>
+                                                                <li menuItemName="Forgot Password?" class="dropdown-item" id="Secondary_Navbar-Account-Forgot_Password?">
+                        <a href="/index.php?rp=/password/reset" class="dropdown-item px-2 py-0">
+                                                        忘記密碼？
+                                                    </a>
+                    </li>
+                                        </ul>
+            </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    
+    <nav class="master-breadcrumb" aria-label="breadcrumb">
+        <div class="container">
+            <ol class="breadcrumb">
+            <li class="breadcrumb-item active" aria-current="page">
+                        購物車
+                    </li>
+    </ol>
+        </div>
+    </nav>
+
+        
+    
+    <section id="main-body">
+        <div class="container">
+            <div class="">
+
+                        <div class=" primary-content">
+
+
+<link rel="stylesheet" type="text/css" href="/templates/orderforms/standard_cart/css/all.min.css?v=3deca3" />
+<script type="text/javascript" src="/templates/orderforms/standard_cart/js/scripts.min.js?v=3deca3"></script>
+<div id="order-standard_cart">
+    <div class="row">
+        <div class="cart-sidebar sidebar">
+                <div menuItemName="Categories" class="panel card card-sidebar mb-3 panel-sidebar">
+        <div class="panel-heading card-header">
+            <h3 class="panel-title">
+                                    <i class="fas fa-shopping-cart"></i>&nbsp;
+                
+                分類
+
+                
+                <i class="fas fa-chevron-up card-minimise panel-minimise pull-right float-right"></i>
+            </h3>
+        </div>
+
+        
+                    <div class="list-group collapsable-card-body">
+                                                            <a menuItemName="台灣VPS - 動態IP" href="/index.php?rp=/store/taiwan-vps-dynamic" class="list-group-item list-group-item-action" id="Secondary_Sidebar-Categories-台灣VPS_-_動態IP">
+                            
+                            台灣VPS - 動態IP
+
+                                                    </a>
+                                                                                <a menuItemName="台灣VPS - 固定IP" href="/index.php?rp=/store/taiwan-vps-fixed" class="list-group-item list-group-item-action" id="Secondary_Sidebar-Categories-台灣VPS_-_固定IP">
+                            
+                            台灣VPS - 固定IP
+
+                                                    </a>
+                                                                                <a menuItemName="Taipei Premium" href="/index.php?rp=/store/taipei-premium" class="list-group-item list-group-item-action" id="Secondary_Sidebar-Categories-Taipei_Premium">
+                            
+                            Taipei Premium
+
+                                                    </a>
+                                                                                <a menuItemName="Taipei ECO" href="/index.php?rp=/store/taipei-eco" class="list-group-item list-group-item-action" id="Secondary_Sidebar-Categories-Taipei_ECO">
+                            
+                            Taipei ECO
+
+                                                    </a>
+                                                </div>
+        
+            </div>
+
+        <div menuItemName="Actions" class="panel card card-sidebar mb-3 panel-sidebar">
+        <div class="panel-heading card-header">
+            <h3 class="panel-title">
+                                    <i class="fas fa-plus"></i>&nbsp;
+                
+                動作
+
+                
+                <i class="fas fa-chevron-up card-minimise panel-minimise pull-right float-right"></i>
+            </h3>
+        </div>
+
+        
+                    <div class="list-group collapsable-card-body">
+                                                            <a menuItemName="View Cart" href="/cart.php?a=view" class="list-group-item list-group-item-action" id="Secondary_Sidebar-Actions-View_Cart">
+                                                            <i class="fas fa-shopping-cart fa-fw"></i>&nbsp;
+                            
+                            查看購物車
+
+                                                    </a>
+                                                </div>
+        
+            </div>
+
+            </div>
+        <div class="cart-body">
+
+            <div class="header-lined">
+                <h1 class="font-size-36">
+                                            Legacy
+                                    </h1>
+                            </div>
+            
+            <div class="sidebar-collapsed">
+
+            <div class="panel card panel-default">
+                <div class="m-0 panel-heading card-header">
+        <h3 class="panel-title">
+                            <i class="fas fa-shopping-cart"></i>&nbsp;
+            
+            分類
+
+                    </h3>
+    </div>
+
+    <div class="panel-body card-body">
+        <form role="form">
+            <select class="form-control custom-select" onchange="selectChangeNavigate(this)">
+                                                    <option menuItemName="台灣VPS - 動態IP" value="/index.php?rp=/store/taiwan-vps-dynamic" class="list-group-item" >
+                        台灣VPS - 動態IP
+
+                                            </option>
+                                                        <option menuItemName="台灣VPS - 固定IP" value="/index.php?rp=/store/taiwan-vps-fixed" class="list-group-item" >
+                        台灣VPS - 固定IP
+
+                                            </option>
+                                                        <option menuItemName="Taipei Premium" value="/index.php?rp=/store/taipei-premium" class="list-group-item" >
+                        Taipei Premium
+
+                                            </option>
+                                                        <option menuItemName="Taipei ECO" value="/index.php?rp=/store/taipei-eco" class="list-group-item" >
+                        Taipei ECO
+
+                                            </option>
+                                                                        <option value="" class="list-group-item" selected=""selected>- 查看其他分類 -</option>
+                            </select>
+        </form>
+    </div>
+
+            </div>
+            <div class="panel card panel-default">
+                <div class="m-0 panel-heading card-header">
+        <h3 class="panel-title">
+                            <i class="fas fa-plus"></i>&nbsp;
+            
+            動作
+
+                    </h3>
+    </div>
+
+    <div class="panel-body card-body">
+        <form role="form">
+            <select class="form-control custom-select" onchange="selectChangeNavigate(this)">
+                                                    <option menuItemName="View Cart" value="/cart.php?a=view" class="list-group-item" >
+                        查看購物車
+
+                                            </option>
+                                                                        <option value="" class="list-group-item" selected=""selected>- 查看其他分類 -</option>
+                            </select>
+        </form>
+    </div>
+
+            </div>
+    
+            <div class="pull-right form-inline float-right">
+            <form method="post" action="/cart.php?gid=20">
+<input type="hidden" name="token" value="x" />
+                <select name="currency" onchange="submit()" class="form-control">
+                    <option value="">選擇貨幣別</option>
+                                            <option value="1" selected>USD</option>
+                                            <option value="3">CNY</option>
+                                            <option value="9">TWD</option>
+                                    </select>
+            </form>
+        </div>
+    
+</div>
+
+            <div class="products" id="products">
+                <div class="row row-eq-height">
+                                                                <div class="col-md-6">
+                        <div class="product clearfix" id="product88">
+                            <header>
+                                <span id="product88-name">HINET-FIX-600M</span>
+                                                                    <span class="qty">
+                                            0 可用
+                                        </span>
+                                                            </header>
+                            <div class="product-desc">
+                                                                    <p id="product88-description">
+                                        # 依照法律要求，请填写真实数据<br />
+# 填写虚假信息将不会开通<br />
+
+                                    </p>
+                                                                <ul>
+                                                                            <li id="product88-feature1">
+                                            <span class="feature-value">2 vCore</span>
+                                            CPU
+                                        </li>
+                                                                            <li id="product88-feature2">
+                                            <span class="feature-value">2GB</span>
+                                            内存
+                                        </li>
+                                                                            <li id="product88-feature3">
+                                            <span class="feature-value">10GB SSD</span>
+                                            硬盘
+                                        </li>
+                                                                            <li id="product88-feature4">
+                                            <span class="feature-value">HiNet 600Mbps 固定制高QoS等级 共享</span>
+                                            带宽
+                                        </li>
+                                                                            <li id="product88-feature5">
+                                            <span class="feature-value">1 (固定)</span>
+                                            IP
+                                        </li>
+                                                                    </ul>
+                            </div>
+                            <footer>
+                                <div class="product-pricing" id="product88-price">
+                                                                                                                    <span class="price">$120.00 USD</span>
+                                        <br />
+                                                                                    月繳
+                                                                                <br>
+                                                                                                            </div>
+                                <a href="/index.php?rp=/store/legacy/hinet-fix-600m" class="btn btn-success btn-sm btn-order-now" id="product88-order-button">
+                                    <i class="fas fa-shopping-cart"></i>
+                                    立即購買
+                                </a>
+                            </footer>
+                        </div>
+                    </div>
+                                                                                    <div class="col-md-6">
+                        <div class="product clearfix" id="product94">
+                            <header>
+                                <span id="product94-name">KBT-FIX-2.5G</span>
+                                                                    <span class="qty">
+                                            0 可用
+                                        </span>
+                                                            </header>
+                            <div class="product-desc">
+                                                                    <p id="product94-description">
+                                        # 依照法律要求，请填写真实数据<br />
+# 填写虚假信息将不会开通<br />
+
+                                    </p>
+                                                                <ul>
+                                                                            <li id="product94-feature1">
+                                            <span class="feature-value">2 vCore</span>
+                                            CPU
+                                        </li>
+                                                                            <li id="product94-feature2">
+                                            <span class="feature-value">2GB</span>
+                                            内存
+                                        </li>
+                                                                            <li id="product94-feature3">
+                                            <span class="feature-value">10GB SSD</span>
+                                            硬盘
+                                        </li>
+                                                                            <li id="product94-feature4">
+                                            <span class="feature-value">KBT 2.5Gbps 固定制高QoS等级 共享</span>
+                                            带宽
+                                        </li>
+                                                                            <li id="product94-feature5">
+                                            <span class="feature-value">1 (固定)</span>
+                                            IP
+                                        </li>
+                                                                    </ul>
+                            </div>
+                            <footer>
+                                <div class="product-pricing" id="product94-price">
+                                                                                                                    <span class="price">$120.00 USD</span>
+                                        <br />
+                                                                                    月繳
+                                                                                <br>
+                                                                                                            </div>
+                                <a href="/index.php?rp=/store/legacy/kbt-fix-25g" class="btn btn-success btn-sm btn-order-now" id="product94-order-button">
+                                    <i class="fas fa-shopping-cart"></i>
+                                    立即購買
+                                </a>
+                            </footer>
+                        </div>
+                    </div>
+                                    </div>
+                <div class="row row-eq-height">
+                                                        </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="recommendationsModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="float-left pull-left">
+                                            已加入購物車
+                                    </h4>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <div class="clearfix"></div>
+            </div>
+            <div class="modal-body">
+                <div class="product-recommendations-container">
+    <div class="product-recommendations">
+                    <p>基於此產品，我們建議：</p>
+                    </div>
+</div>
+            </div>
+            <div class="modal-footer">
+                <a class="btn btn-primary" href="#" id="btnContinueRecommendationsModal" data-dismiss="modal" role="button">
+                    <span class="w-hidden hidden"><i class="fas fa-spinner fa-spin"></i>&nbsp;</span>繼續
+                </a>
+            </div>
+        </div>
+    </div>
+    <div class="product-recommendation clonable w-hidden hidden">
+        <div class="header">
+            <div class="cta">
+                <div class="price">
+                    <span class="w-hidden hidden">免費！</span>
+                    <span class="breakdown-price"></span>
+                    <span class="setup-fee"><small>&nbsp;設定費</small></span>
+                </div>
+                <button type="button" class="btn btn-sm btn-add">
+                    <span class="text">加入購物車</span>
+                    <span class="arrow"><i class="fas fa-chevron-right"></i></span>
+                </button>
+            </div>
+            <div class="expander">
+                <i class="fas fa-chevron-right rotate" data-toggle="tooltip" data-placement="right" title="點擊了解更多。"></i>
+            </div>
+            <div class="content">
+                <div class="headline truncate"></div>
+                <div class="tagline truncate">
+                    此產品不提供描述（標語）。
+                </div>
+            </div>
+        </div>
+        <div class="body clearfix"><p></p></div>
+    </div>
+</div>
+
+
+                    </div>
+
+                    </div>
+                                    <div class="clearfix"></div>
+            </div>
+        </div>
+    </section>
+
+    <footer id="footer" class="footer">
+        <div class="container">
+            <ul class="list-inline mb-7 text-center float-lg-right">
+                
+                                    <li class="list-inline-item">
+                        <button type="button" class="btn" data-toggle="modal" data-target="#modalChooseLanguage">
+                            <div class="d-inline-block align-middle">
+                                <div class="iti-flag tw"></div>
+                            </div>
+                            中文
+                            /
+                            $
+                            USD
+                        </button>
+                    </li>
+                            </ul>
+
+            <ul class="nav justify-content-center justify-content-lg-start mb-7">
+                <li class="nav-item">
+                    <a class="nav-link" href="/contact.php">
+                        聯絡我們
+                    </a>
+                </li>
+                                    <li class="nav-item">
+                        <a class="nav-link" href="https://billing.tcscloud.net/knowledgebase.php?action=displayarticle&amp;id=3" target="_blank">服務條款</a>
+                    </li>
+                            </ul>
+
+            <p class="copyright mb-0">
+                版權所有 &copy; 2026 TCSCloud。版權所有。
+            </p>
+        </div>
+    </footer>
+
+    <div id="fullpage-overlay" class="w-hidden">
+        <div class="outer-wrapper">
+            <div class="inner-wrapper">
+                <img src="/assets/img/overlay-spinner.svg" alt="">
+                <br>
+                <span class="msg"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal system-modal fade" id="modalAjax" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"></h5>
+                    <button type="button" class="close" data-dismiss="modal">
+                        <span aria-hidden="true">&times;</span>
+                        <span class="sr-only">關閉服務單</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    載入中...
+                </div>
+                <div class="modal-footer">
+                    <div class="float-left loader">
+                        <i class="fas fa-circle-notch fa-spin"></i>
+                        載入中...
+                    </div>
+                    <button type="button" class="btn btn-default" data-dismiss="modal">
+                        關閉服務單
+                    </button>
+                    <button type="button" class="btn btn-primary modal-submit">
+                        送出
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <form method="get" action="/index.php?rp=%2Fstore%2Flegacy&">
+        <div class="modal modal-localisation" id="modalChooseLanguage" tabindex="-1" role="dialog">
+            <div class="modal-dialog modal-lg" role="document">
+                <div class="modal-content">
+                    <div class="modal-body">
+                        <button type="button" class="close text-light" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+
+                                                    <h5 class="h5 pt-5 pb-3">語言</h5>
+                            <div class="row item-selector">
+                                <input type="hidden" name="language" data-current="chinese" value="chinese" />
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="arabic">
+                                            العربية
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="azerbaijani">
+                                            Azerbaijani
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="catalan">
+                                            Català
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item active" data-value="chinese">
+                                            中文
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="croatian">
+                                            Hrvatski
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="czech">
+                                            Čeština
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="danish">
+                                            Dansk
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="dutch">
+                                            Nederlands
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="english">
+                                            English
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="estonian">
+                                            Estonian
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="farsi">
+                                            Persian
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="french">
+                                            Français
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="german">
+                                            Deutsch
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="hebrew">
+                                            עברית
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="hungarian">
+                                            Magyar
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="italian">
+                                            Italiano
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="macedonian">
+                                            Macedonian
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="norwegian">
+                                            Norwegian
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="portuguese-br">
+                                            Português
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="portuguese">
+                                            Português
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="romanian">
+                                            Română
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="russian">
+                                            Русский
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="spanish">
+                                            Español
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="swedish">
+                                            Svenska
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="turkish">
+                                            Türkçe
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="ukrainian">
+                                            Українська
+                                        </a>
+                                    </div>
+                                                            </div>
+                                                                            <p class="h5 pt-5 pb-3">選擇貨幣別</p>
+                            <div class="row item-selector">
+                                <input type="hidden" name="currency" data-current="1" value="">
+                                                                    <div class="col-4">
+                                        <a href="#" class="item active" data-value="1">
+                                            $ USD
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="3">
+                                            ￥ CNY
+                                        </a>
+                                    </div>
+                                                                    <div class="col-4">
+                                        <a href="#" class="item" data-value="9">
+                                            $ TWD
+                                        </a>
+                                    </div>
+                                                            </div>
+                                            </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-default">申請</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </form>
+
+    
+    <form action="#" id="frmGeneratePassword">
+    <div class="modal fade" id="modalGeneratePassword">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h4 class="modal-title">
+                        產生密碼
+                    </h4>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-danger w-hidden" id="generatePwLengthError">
+                        輸入介於 12 和 64 之間的數字做為密碼長度。
+                    </div>
+                    <div class="form-group row">
+                        <label for="generatePwLength" class="col-sm-4 col-form-label">密碼長度</label>
+                        <div class="col-sm-8">
+                            <input type="number" min="12" max="64" value="12" step="1" class="form-control input-inline input-inline-100" id="inputGeneratePasswordLength">
+                        </div>
+                    </div>
+                    <div class="form-group row">
+                        <label for="inputGeneratePasswordOutput" class="col-sm-4 col-form-label">產生的密碼</label>
+                        <div class="col-sm-8">
+                            <input type="text" class="form-control" id="inputGeneratePasswordOutput">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-sm-8 offset-sm-4">
+                            <button type="submit" class="btn btn-default btn-sm">
+                                <i class="fas fa-plus fa-fw"></i>
+                                產生新密碼
+                            </button>
+                            <button type="button" class="btn btn-default btn-sm copy-to-clipboard" data-clipboard-target="#inputGeneratePasswordOutput">
+                                <img src="/assets/img/clippy.svg" alt="Copy to clipboard" width="15">
+                                複製
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">
+                        關閉服務單
+                    </button>
+                    <button type="button" class="btn btn-primary" id="btnGeneratePasswordInsert" data-clipboard-target="#inputGeneratePasswordOutput">
+                        複製到剪貼簿並插入
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+
+    
+
+</body>
+</html>

@@ -1065,6 +1065,7 @@ def _provider_name(value: str) -> str:
         "highend": "HighEnd",
         "leikwanhost": "LeiKwanHost",
         "liqunhuiju": "利群汇聚",
+        "tcscloud": "TCSCloud",
         "vmsilo": "VMSILO",
         "misaka": "Misaka",
     }.get(value, value.title())

@@ -15,6 +15,7 @@ from .liqunhuiju import LiqunHuijuProvider
 from .misaka import MisakaProvider
 from .nexkr import NexKrProvider
 from .nnb import NnbProvider
+from .tcscloud import TcscloudProvider
 from .vmsilo import VmsiloProvider
 
 
@@ -34,6 +35,7 @@ def build_provider(config: Dict[str, Any]) -> BaseProvider:
         "leikwanhost": LeikwanhostProvider,
         "liqunhuiju": LiqunHuijuProvider,
         "misaka": MisakaProvider,
+        "tcscloud": TcscloudProvider,
         "vmsilo": VmsiloProvider,
         "generic": GenericProvider,
     }
@@ -53,6 +55,7 @@ __all__ = [
     "LiqunHuijuProvider",
     "MisakaProvider",
     "NnbProvider",
+    "TcscloudProvider",
     "VmsiloProvider",
     "build_provider",
 ]
