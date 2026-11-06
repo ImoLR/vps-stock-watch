@@ -275,40 +275,44 @@ IPLC 独服，以及日本、香港、洛杉矶、大陆独服。
 
 ### HighEndNetwork（HEN）
 
-`billing.highendnetwork.com` 是 WHMCS 站点，套在 Cloudflare 后面。2026-11-06 实测：
-`/store/...` 和 `cart.php` 对开发机、生产机、aws-hk 都返回 403 “Just a moment” 交互式
-Turnstile 挑战，生产机 Xvfb 有头 Chromium 等 45 秒也过不去。所以**读不到库存**，也没有
-去绕这个挑战。
+`billing.highendnetwork.com` 是 WHMCS 站点，套在 Cloudflare 后面。`/store/...` 和 `cart.php`
+对所有机房 IP 都返回 “Just a moment” 交互式 Turnstile 挑战（Playwright Chromium 自动点勾选框
+也会循环，换 HiNet 家宽出口也一样）。
 
-没被挑战的是 WHMCS 公开数据源 `feeds/productsinfo.php?pid=N&get=name|price|orderurl|description`
-（和 `/announcements/rss`，但公告里只有 TOS/AUP）。它对任意 PID 返回
-`document.write('...')`，不存在的 PID 返回 `Product ID Not Found`，**隐藏商品和只发直链的活动款也能查到**：
-`/store/promotion/tpe-seednet-matcha` 就是 pid 20 `Seednet.Matcha`，官网分类里的
-`/store/tpe-home-broadband/tpe-seednet-lavender` 是 pid 19。feed 不给库存（`get` 只接受
-name/description/configoption/orderurl/price），价格要按付款周期分别查，不提供的周期返回
-`$-1.00 USD`。站点只有 USD 一种货币。2026-11-06 快照：pid 1–22 全部存在（1、2 是 `test`），
-23–102 全空；Lavender $75/季，Matcha 只有年付 $240，描述都是“1 vCore / 1G / 10GB SSD /
-不限流量 / 300Mbps 共享，家宽无 SLA”。
+**库存走 `index.php?rp=/store/...`**：Cloudflare 规则只拦 `/store` 路径，WHMCS 的非伪静态写法
+`index.php?rp=/store/promotion` 是同一个页面，普通 HTTP 直接 200（2026-11-06 发现）。分类页每个
+商品有 `<span id="product<PID>-name">` 和 `N Available`（PID 就是 id 里的数字），下单按钮是
+`/store/<分类>/<slug>`。隐藏的活动直链（不在分类里，如 pid 20 Matcha）用
+`index.php?rp=/store/promotion/tpe-seednet-matcha`、不跟随跳转：302 到 `cart.php?a=confproduct`
+= 有货（顺手清掉会话 cookie，免得购物车越积越多），200 且含 “Out of Stock” = 无货，其它回复整轮作废。
 
-Provider（`type: highend`）因此只报 **新 PID / 改名 / 改价 / 下架**，`available` 恒为
-未知：
+**目录走公开 feed** `feeds/productsinfo.php?pid=N&get=name|price|description`（也没被挑战）：
+对任意 PID 返回 `document.write('...')`，不存在返回 `Product ID Not Found`，隐藏商品和只发直链的
+活动款也能查到，所以新 PID 往往比活动链接公布还早。价格按付款周期分别查，不提供的周期返回
+`$-1.00 USD`，只有 USD。
 
+Provider（`type: highend`），2026-11-06 用户定的规则：
+
+- 每轮 120 秒：读 `store_pages`（台湾家宽 + 促销两个分类）和 `direct_links`（Matcha），3 个请求。
+  分类页上出现 feed 还没见过的 PID 当轮就加进目录（查价格规格）并推送新品。
+- 每 `feed_every_rounds`（5）轮 = 10 分钟跑一次 feed：轮流复查 `sweep_batch`（2）个 PID 名称
+  （所有地区，用来发现下架）；探测历史最大 PID 之上 `probe_ahead`（2）个号；给一个关注商品刷新
+  四个付款周期价格（按上次查价时间轮换，偶数轮优先还没价格的；第一次还读 `description` 取规格）。
+  共 8 个请求。合计约 3.3k 请求/天，间隔 5 秒。
+- **通知**：新 PID / PID 下架 / 商品上架到或撤出所监控的分类页（`fields == ["listing"]`）——
+  **不管什么产品都推**。价格、库存（有货/无货/数量）、改名——**只推 `watch_keywords`**
+  （名称含 hinet / seednet；So-Net.Peony 不算）。
 - 首次运行从 pid 1 往上只查名称，连续 `discovery_misses`（40）个空号就停，作为基线不推送。
-- `focus_regions: [TW]`（2026-11-06 用户要求）：只复查、只推送台湾区（名称前缀
-  HiNet / Seednet / So-Net / TPE 等）。HK/SG 留在目录里保住 PID 高水位，但不再复查、新出现也
-  不推送不查价；名称认不出地区的（如 `test`）仍复查名称，新出现照样推送，以免漏掉改名的活动款。
-- 之后每轮（300 秒）：轮流复查 `sweep_batch`（1）个关注区 PID 的名称；探测历史最大 PID
-  之上的 `probe_ahead`（2）个号（`far_probe_span` 设 0 关掉远端探测）；再给一个台湾商品刷新
-  monthly/quarterly/semiannually/annually 四个价格（按上次查价时间轮换，偶数轮优先还没价格的，
-  比如还没开卖的 So-Net.Peony，一开价就推送“改价”；每个商品第一次还会读一次 `description`，
-  从里面取 vCore/RAM/SSD/流量/带宽）。新 PID 当轮就查价格和规格，推送里带价格、规格和下单直链。
-  每轮 7 个请求、间隔 5 秒，约 2k 请求/天。
-- 2026-11-06 生产机试过有头 Chromium 自动点 Turnstile 勾选框：点后拿到 `cf_clearance`，但页面
-  立刻又回到验证，循环过不去（机房 IP）。不要在机房 IP 上反复试。
-- 一个 PID 连续两次查不到才算下架；任何一个请求失败或回复不是 `document.write` 就整轮作废，
-  不改缓存。403/429/挑战页不重试，由调度器退避（最长 3600 秒）。
-- 目录缓存在内存里，重启时通过 `restore_state` 从 state.json 恢复（含 `high_water_pid`），
-  不会重新从 pid 1 扫起。基线后第一次补上价格不推送“价格变化”。
+  上线后第一轮只是给目录补上库存，不推“上架”。
+- 一个 PID 连续两次查不到才算下架；任何请求失败、挑战页或回复格式不对就整轮作废，不改缓存。
+  403/429/挑战页不重试，由调度器退避（最长 3600 秒）并发“监控异常”。
+- 目录通过 `restore_state` 从 state.json 恢复（含 `high_water_pid`）。基线后第一次补上价格不推，
+  已经查过但没价格的商品（未开卖的活动款）开价时会推。
+
+**备用方案（`rp` 路由被堵时）**：开发机 `/root/hen-stealth` 有 Camoufox（反检测 Firefox，
+`TMPDIR`/`HOME` 指到该目录）。出口走 `ssh -D` 到妙妙屋 5 号机（HiNet 家宽），点一次 Turnstile
+通过率约 2/3。通过后的 `cf_clearance` 有效期 1 年，但绑定 IP 和 UA，5 号机是动态 IP。
+生产机是 Debian 11，跑不了 Camoufox。
 
 ### TCSCloud
 

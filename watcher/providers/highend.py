@@ -19,6 +19,15 @@ ORDER_URL = "cart.php?a=add&pid=%s"
 NOT_FOUND = "Product ID Not Found"
 CYCLES = ("monthly", "quarterly", "semiannually", "annually")
 FEED_BODY = re.compile(r"^\s*document\.write\('(?P<value>.*)'\);?\s*$", re.S)
+# Cloudflare challenges the /store/... paths only; WHMCS serves the same pages
+# at index.php?rp=/store/... and that route is not challenged.
+STORE_ROUTE = "index.php"
+PRODUCT_HEADER = re.compile(
+    r'<header>\s*<span id="product(?P<pid>\d+)-name">(?P<name>.*?)</span>(?P<rest>.*?)</header>',
+    re.S,
+)
+QTY = re.compile(r"(\d+)\s+Available", re.I)
+OUT_OF_STOCK = "Out of Stock"
 # Name prefix -> region. Names look like HKG.P0.Micro, SIN.Standard.Mini, Seednet.Matcha.
 REGIONS = {
     "hkg": "HK",
@@ -72,6 +81,29 @@ def parse_specs(description: str) -> Dict[str, str]:
     return specs
 
 
+def parse_store_page(body: str) -> Dict[str, Dict[str, Any]]:
+    """Products on a store category page: {pid: {name, stock, link}}.
+
+    ``stock`` is the ``N Available`` count, or None when the product does not
+    track stock.
+    """
+    if 'id="products"' not in body:
+        raise ParseError("HighEnd store page has no product list")
+    products: Dict[str, Dict[str, Any]] = {}
+    for match in PRODUCT_HEADER.finditer(body):
+        pid = match.group("pid")
+        qty = QTY.search(re.sub(r"<[^>]+>", " ", match.group("rest")))
+        link = re.search(
+            r'<a href="(?P<href>[^"]+)"[^>]*id="product%s-order-button"' % pid, body
+        )
+        products[pid] = {
+            "name": " ".join(re.sub(r"<[^>]+>", " ", match.group("name")).split()),
+            "stock": int(qty.group(1)) if qty else None,
+            "link": link.group("href") if link else None,
+        }
+    return products
+
+
 def parse_price(value: str) -> Optional[str]:
     """Return a display price, or None for a cycle the product does not offer (-1.00)."""
     value = " ".join(value.split())
@@ -81,27 +113,29 @@ def parse_price(value: str) -> Optional[str]:
 
 
 class HighendProvider(BaseProvider):
-    """HighEndNetwork (HEN) WHMCS store, read through the public data feed.
+    """HighEndNetwork (HEN) WHMCS store.
 
-    Cloudflare puts an interactive challenge on ``/store`` and ``cart.php``
-    for every server IP we tried (plain HTTP and headed Chromium alike), but
-    ``feeds/productsinfo.php`` is open. It answers name / price / order URL
-    for any PID, including sale products that only exist as a direct link
-    (``/store/promotion/...``), so new PIDs are found before anyone posts the
-    link. It has no stock field: products carry ``available=None`` and the
-    alerts are new / renamed / repriced / removed PIDs.
+    Cloudflare puts an interactive challenge on ``/store/...`` and
+    ``cart.php`` (for server and browser alike), but WHMCS also serves the
+    store at ``index.php?rp=/store/...``, which is not challenged. Every
+    round reads the ``store_pages`` categories there (``N Available`` per
+    product) and the ``direct_links`` of hidden sale items (a redirect to
+    ``cart.php?a=confproduct`` means orderable, an "Out of Stock" page means
+    sold out).
 
-    Each round re-reads a few known PIDs in rotation, probes just above the
-    highest PID seen (WHMCS IDs only grow) and refreshes one product's prices
-    (plus its description-derived specs, once),
-    all one request at a time ``request_spacing_seconds`` apart. The catalog
-    survives restarts through ``restore_state``; only the very first run walks
-    every PID.
+    The catalog itself comes from the open ``feeds/productsinfo.php``, which
+    answers name / price for any PID, including direct-link sale products, so
+    new PIDs are found before anyone posts the link. Every
+    ``feed_every_rounds`` rounds the feed re-reads a few known PIDs in
+    rotation, probes just above the highest PID seen (WHMCS IDs only grow)
+    and refreshes one watched product's prices (plus its description-derived
+    specs, once). All requests go one at a time ``request_spacing_seconds``
+    apart. The catalog survives restarts through ``restore_state``; only the
+    very first run walks every PID.
 
-    With ``focus_regions`` set, only those regions (plus unclassified names
-    such as ``test``) are re-read, and only those regions get prices. Other
-    regions stay in the catalog so the PID high-water mark holds, but they
-    are never re-read and never notify.
+    New and removed PIDs, and products put on or taken off the watched store
+    pages, alert for every product. Price, stock and name changes alert only
+    for names matching ``watch_keywords``.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -113,6 +147,7 @@ class HighendProvider(BaseProvider):
         self._sweep_cursor = 0
         self._far_cursor = 0
         self._rounds = 0
+        self._feed_rounds = 0
         self._last_request: Optional[float] = None
         self._requests = 0
         self._clock: Callable[[], float] = time.monotonic
@@ -133,17 +168,40 @@ class HighendProvider(BaseProvider):
     ) -> None:
         provider_state["high_water_pid"] = self._high_water
 
-    def _in_focus(self, region: Optional[str], unknown: bool = True) -> bool:
-        focus = {str(item).upper() for item in self.config.get("focus_regions") or []}
-        if not focus:
+    def _watched(self, product: Product) -> bool:
+        keywords = [str(item).casefold() for item in self.config.get("watch_keywords") or []]
+        if not keywords:
             return True
-        if region is None:
-            return unknown
-        return region.upper() in focus
+        name = product.name.casefold()
+        return any(keyword in name for keyword in keywords)
+
+    def additional_changes(
+        self, products: List[Product], previous_state: Dict[str, Any]
+    ) -> List[Change]:
+        """A known PID put on, or taken off, a watched store page (``["listing"]``)."""
+        old_products = {}
+        for item in (previous_state.get("products") or {}).values():
+            product = Product.from_dict(item)
+            old_products[product.product_id] = product
+        changes: List[Change] = []
+        for product in products:
+            old = old_products.get(product.product_id)
+            if old is None or not old.metadata.get("store_seen"):
+                continue
+            was = old.metadata.get("listed_in")
+            now = product.metadata.get("listed_in")
+            if was != now:
+                kind = ChangeType.NEW if now else ChangeType.REMOVED
+                changes.append(Change(kind, product, old, ["listing"]))
+        return changes
 
     def should_notify(self, change: Change) -> bool:
+        # New / removed PIDs and store-page moves alert for every product;
+        # price, stock and name changes only for watched ones.
+        if change.type in (ChangeType.NEW, ChangeType.REMOVED):
+            return super().should_notify(change)
         products = [change.product] + ([change.old] if change.old else [])
-        if not any(self._in_focus(product.region) for product in products):
+        if not any(self._watched(product) for product in products):
             return False
         # Prices are filled in lazily after the baseline walk; the first fill
         # is not a price change. A product already read with no price at all
@@ -162,14 +220,21 @@ class HighendProvider(BaseProvider):
     def fetch_products(self) -> List[Product]:
         started = time.monotonic()
         self._requests = 0
+        listed, direct = self._read_store()
+        every = max(1, int(self.config.get("feed_every_rounds", 1)))
         if not self._catalog:
             found = self._discover_all()
-        else:
+        elif self._rounds % every == 0:
             found = self._incremental()
+        else:
+            found = []
+        found += self._apply_store(listed, direct)
+        self._rounds += 1
         self.last_scan_stats = {
             "products": len(self._catalog),
             "high_water_pid": self._high_water,
             "new_pids": found,
+            "listed": len(listed),
             "requests": self._requests,
             "duration_seconds": round(time.monotonic() - started, 3),
         }
@@ -208,7 +273,7 @@ class HighendProvider(BaseProvider):
 
         # 1. Rotate through known PIDs, confirming suspected removals first.
         batch = max(0, int(self.config.get("sweep_batch", 5)))
-        known = [pid for pid in sorted(catalog, key=int) if self._in_focus(catalog[pid].region)]
+        known = sorted(catalog, key=int)
         suspects = [pid for pid in known if pid in missing]
         rotation = [pid for pid in known if pid not in missing]
         picked = suspects[:batch]
@@ -247,8 +312,7 @@ class HighendProvider(BaseProvider):
             if name is None:
                 continue
             product = self._product(str(pid), name)
-            if self._in_focus(product.region):
-                self._fill_prices(product)
+            self._fill_prices(product)
             catalog[str(pid)] = product
             found.append(str(pid))
             high_water = max(high_water, pid)
@@ -256,12 +320,12 @@ class HighendProvider(BaseProvider):
         # 3. Refresh one product's prices, oldest first. Every other round
         #    goes to a not-yet-priced product first (a sale item about to
         #    open), so one of those cannot starve the rest.
-        unpriced_first = self._rounds % 2 == 0
+        unpriced_first = self._feed_rounds % 2 == 0
         for _ in range(max(0, int(self.config.get("price_batch", 1)))):
             candidates = [
                 pid
                 for pid in sorted(catalog, key=int)
-                if pid not in found and self._in_focus(catalog[pid].region, unknown=False)
+                if pid not in found and self._watched(catalog[pid])
             ]
             if not candidates:
                 break
@@ -283,7 +347,79 @@ class HighendProvider(BaseProvider):
         self._high_water = high_water
         self._sweep_cursor = cursor
         self._far_cursor += 1
-        self._rounds += 1
+        self._feed_rounds += 1
+        return found
+
+    # -- store pages ---------------------------------------------------------------
+
+    def _read_store(self) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Tuple[bool, str]]]:
+        """Read the watched category pages and the hidden direct links."""
+        listed: Dict[str, Dict[str, Any]] = {}
+        for path in self.config.get("store_pages") or []:
+            body = self._fetch(self.base_url + STORE_ROUTE, {"rp": str(path)})
+            for pid, info in parse_store_page(body).items():
+                info["page"] = str(path)
+                listed.setdefault(pid, info)
+        direct: Dict[str, Tuple[bool, str]] = {}
+        for pid, path in (self.config.get("direct_links") or {}).items():
+            pid, path = str(pid), str(path)
+            if pid in listed:
+                continue
+            response = self._request(
+                self.base_url + STORE_ROUTE, {"rp": path}, allow_redirects=False
+            )
+            location = str((getattr(response, "headers", None) or {}).get("Location", ""))
+            if 300 <= response.status_code < 400 and "confproduct" in location:
+                direct[pid] = (True, path)
+            elif response.status_code == 200 and OUT_OF_STOCK in response.text:
+                direct[pid] = (False, path)
+            else:
+                raise ParseError(
+                    "HighEnd direct link %s: unexpected reply HTTP %s %s"
+                    % (path, response.status_code, location)
+                )
+            # An orderable product was just put in this session's cart; drop it.
+            cookies = getattr(self.session, "cookies", None)
+            if cookies is not None:
+                cookies.clear()
+        return listed, direct
+
+    def _apply_store(
+        self, listed: Dict[str, Dict[str, Any]], direct: Dict[str, Tuple[bool, str]]
+    ) -> List[str]:
+        """Put store stock on the catalog; returns PIDs first seen on a store page."""
+        found: List[str] = []
+        for pid, info in listed.items():
+            if pid not in self._catalog and info["name"]:
+                product = self._product(pid, info["name"])
+                self._fill_prices(product)
+                self._catalog[pid] = product
+                self._high_water = max(self._high_water, int(pid))
+                found.append(pid)
+        root = self.base_url.rstrip("/")
+        for pid, current in list(self._catalog.items()):
+            product = self._copy(current)
+            product.metadata["store_seen"] = True
+            info = listed.get(pid)
+            if info is not None:
+                product.stock = info["stock"]
+                product.available = None if info["stock"] is None else info["stock"] > 0
+                product.metadata["listed_in"] = info["page"]
+                product.metadata["stock_source"] = "store page"
+                if info["link"]:
+                    product.url = root + info["link"]
+            elif pid in direct:
+                product.available, path = direct[pid]
+                product.stock = None
+                product.metadata["listed_in"] = None
+                product.metadata["stock_source"] = "direct link"
+                product.url = root + path
+            else:
+                product.available = None
+                product.stock = None
+                product.metadata["listed_in"] = None
+                product.metadata["stock_source"] = "none (not on a watched store page)"
+            self._catalog[pid] = product
         return found
 
     # -- products ----------------------------------------------------------------
@@ -297,7 +433,6 @@ class HighendProvider(BaseProvider):
             category=category,
             region=region,
             url=self.base_url + ORDER_URL % pid,
-            metadata={"stock_source": "none (store pages behind Cloudflare challenge)"},
         )
 
     @staticmethod
@@ -337,6 +472,9 @@ class HighendProvider(BaseProvider):
         return parse_feed(self._fetch(self.base_url + FEED_PATH, params))
 
     def _fetch(self, url: str, params: Dict[str, str]) -> str:
+        return self._request(url, params).text
+
+    def _request(self, url: str, params: Dict[str, str], allow_redirects: bool = True) -> Any:
         attempts = max(1, int(self.config.get("retry_attempts", 2)))
         spacing = max(3.0, float(self.config.get("request_spacing_seconds", 5)))
         for attempt in range(attempts):
@@ -347,7 +485,9 @@ class HighendProvider(BaseProvider):
             self._last_request = self._clock()
             self._requests += 1
             try:
-                response = self.session.get(url, params=params, timeout=self.timeout)
+                response = self.session.get(
+                    url, params=params, timeout=self.timeout, allow_redirects=allow_redirects
+                )
             except requests.RequestException as exc:
                 if attempt + 1 < attempts:
                     continue
@@ -364,5 +504,5 @@ class HighendProvider(BaseProvider):
                 continue
             if response.status_code >= 400:
                 raise FetchError("HTTP %s for %s" % (response.status_code, url), response.status_code)
-            return text
+            return response
         raise FetchError("request failed for %s" % url)

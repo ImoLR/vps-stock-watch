@@ -201,26 +201,34 @@ providers:
       - --disable-blink-features=AutomationControlled
       - --renderer-process-limit=2
 
-  # HighEndNetwork (HEN): Cloudflare challenges /store and cart.php for our
-  # IPs, so stock is unreadable. The public WHMCS feed (productsinfo.php) is
-  # open and lists every PID, including direct-link sale items such as
-  # /store/promotion/tpe-seednet-matcha (pid 20), so a new PID alerts before
-  # the link is posted. Only Taiwan (HiNet / Seednet / So-net) is re-read and
-  # notified; HK/SG stay silent. Per 5-min round: 1 known name + 2 probes
-  # above the highest PID + 4 prices for one TW product = 7 requests, 5 s
-  # apart (~2k/day).
+  # HighEndNetwork (HEN): Cloudflare challenges /store/... and cart.php, but
+  # the same store pages at index.php?rp=/store/... are not challenged. Every
+  # 2-min round reads the TPE + Promotion categories ("N Available") and the
+  # hidden Matcha direct link = 3 requests. Every 5th round (10 min) the open
+  # productsinfo feed also re-reads 2 names, probes 2 PIDs above the highest
+  # (new hidden sale links) and refreshes 4 prices of one watched product
+  # = 8 requests. 5 s apart; ~3.3k/day. New / removed PIDs and store-page
+  # moves alert for every product; price / stock / name only for HiNet and
+  # Seednet (user, 2026-11-06).
   - name: highend
     type: highend
     enabled: true
     base_url: https://billing.highendnetwork.com/
     currency_id: 1
-    interval_seconds: 300
+    interval_seconds: 120
     timeout_seconds: 20
     request_spacing_seconds: 5
     retry_attempts: 2
-    focus_regions:
-      - TW
-    sweep_batch: 1
+    watch_keywords:
+      - hinet
+      - seednet
+    store_pages:
+      - /store/tpe-home-broadband
+      - /store/promotion
+    direct_links:
+      "20": /store/promotion/tpe-seednet-matcha
+    feed_every_rounds: 5
+    sweep_batch: 2
     probe_ahead: 2
     far_probe_span: 0
     price_batch: 1
