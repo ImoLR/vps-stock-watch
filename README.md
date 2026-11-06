@@ -273,6 +273,38 @@ IPLC 独服，以及日本、香港、洛杉矶、大陆独服。
   200GB 半年 ¥720（500GB ¥2100、1000G ¥4500），无初装费，默认首付 ¥779.99/半年。
   活动结束后从配置里删掉即可（会发一条“下架”）。
 
+### HighEndNetwork（HEN）
+
+`billing.highendnetwork.com` 是 WHMCS 站点，套在 Cloudflare 后面。2026-11-06 实测：
+`/store/...` 和 `cart.php` 对开发机、生产机、aws-hk 都返回 403 “Just a moment” 交互式
+Turnstile 挑战，生产机 Xvfb 有头 Chromium 等 45 秒也过不去。所以**读不到库存**，也没有
+去绕这个挑战。
+
+没被挑战的是 WHMCS 公开数据源 `feeds/productsinfo.php?pid=N&get=name|price|orderurl|description`
+（和 `/announcements/rss`，但公告里只有 TOS/AUP）。它对任意 PID 返回
+`document.write('...')`，不存在的 PID 返回 `Product ID Not Found`，**隐藏商品和只发直链的活动款也能查到**：
+`/store/promotion/tpe-seednet-matcha` 就是 pid 20 `Seednet.Matcha`，官网分类里的
+`/store/tpe-home-broadband/tpe-seednet-lavender` 是 pid 19。feed 不给库存（`get` 只接受
+name/description/configoption/orderurl/price），价格要按付款周期分别查，不提供的周期返回
+`$-1.00 USD`。站点只有 USD 一种货币。2026-11-06 快照：pid 1–22 全部存在（1、2 是 `test`），
+23–102 全空；Lavender $75/季，Matcha 只有年付 $240，描述都是“1 vCore / 1G / 10GB SSD /
+不限流量 / 300Mbps 共享，家宽无 SLA”。
+
+Provider（`type: highend`）因此只报 **新 PID / 改名 / 改价 / 下架**，`available` 恒为
+未知：
+
+- 首次运行从 pid 1 往上只查名称，连续 `discovery_misses`（40）个空号就停，作为基线不推送。
+- 之后每轮（600 秒）：轮流复查 `sweep_batch`（5）个已知 PID 的名称；探测历史最大 PID
+  之上的 `probe_ahead`（3）个号，外加在更远 `far_probe_span`（10）个号里轮换一个，防止删掉的
+  测试商品留下空洞；再给一个商品刷新 monthly/quarterly/semiannually/annually 四个价格
+  （没价格的优先；每个商品第一次还会读一次 `description`，从里面取 vCore/RAM/SSD/流量/带宽）。
+  新 PID 当轮就查价格和规格，推送里带价格、规格和下单直链。每轮 13 个请求（读规格那次 14 个）、
+  间隔 5 秒，约 1.9k 请求/天。
+- 一个 PID 连续两次查不到才算下架；任何一个请求失败或回复不是 `document.write` 就整轮作废，
+  不改缓存。403/429/挑战页不重试，由调度器退避（最长 3600 秒）。
+- 目录缓存在内存里，重启时通过 `restore_state` 从 state.json 恢复（含 `high_water_pid`），
+  不会重新从 pid 1 扫起。基线后第一次补上价格不推送“价格变化”。
+
 ### Misaka
 
 Misaka 的控制台是 Vite SPA；前端 API client 公开调用

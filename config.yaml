@@ -201,6 +201,29 @@ providers:
       - --disable-blink-features=AutomationControlled
       - --renderer-process-limit=2
 
+  # HighEndNetwork (HEN): Cloudflare challenges /store and cart.php for our
+  # IPs, so stock is unreadable. The public WHMCS feed (productsinfo.php) is
+  # open and lists every PID, including direct-link sale items such as
+  # /store/promotion/tpe-seednet-matcha (pid 20), so a new PID alerts before
+  # the link is posted. Per 10-min round: 5 known names + 4 probes above the
+  # highest PID + 4 prices for one product = 13 requests, 5 s apart (~1.9k/day).
+  - name: highend
+    type: highend
+    enabled: true
+    base_url: https://billing.highendnetwork.com/
+    currency_id: 1
+    interval_seconds: 600
+    timeout_seconds: 20
+    request_spacing_seconds: 5
+    retry_attempts: 2
+    sweep_batch: 5
+    probe_ahead: 3
+    far_probe_span: 10
+    price_batch: 1
+    discovery_misses: 40
+    minimum_products: 10
+    max_backoff_seconds: 3600
+
   - name: misaka
     type: misaka
     enabled: true

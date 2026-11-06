@@ -89,6 +89,10 @@ class WatcherApp:
         ]
         if not self.providers:
             raise ValueError("no enabled providers")
+        for provider in self.providers:
+            saved = self.store.data["providers"].get(provider.name)
+            if saved and saved.get("initialized"):
+                provider.restore_state(deepcopy(saved))
         credentials = telegram_credentials()
         self.telegram: Optional[TelegramClient] = None
         if notifications:

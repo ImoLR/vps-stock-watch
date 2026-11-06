@@ -51,6 +51,9 @@ class BaseProvider(ABC):
     def fetch_products(self) -> List[Product]:
         raise NotImplementedError
 
+    def restore_state(self, provider_state: Dict[str, Any]) -> None:
+        """Seed in-memory caches from the saved state once, at startup."""
+
     def validate_snapshot(
         self, products: List[Product], previous_state: Dict[str, Any]
     ) -> None:
