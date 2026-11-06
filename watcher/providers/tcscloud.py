@@ -369,6 +369,14 @@ class TcscloudProvider(BaseProvider):
                 unlisted[pid] = name
 
         feed_round = not self._restored and not self._unlisted and not self._products
+        if not feed_round:
+            # Straight onto the store, never seen in the feed before.
+            new_pids.extend(
+                sorted(
+                    (pid for pid in listed if pid not in self._products and pid not in self._unlisted),
+                    key=int,
+                )
+            )
         if feed_round:
             high_water = self._discover(listed, unlisted, high_water, new_pids)
         elif self._rounds % max(1, int(self.config.get("feed_every_rounds", 1))) == 0:
@@ -384,6 +392,13 @@ class TcscloudProvider(BaseProvider):
         for pid, name in unlisted.items():
             products[pid] = self._unlisted_product(pid, name)
         products = {pid: p for pid, p in products.items() if self._in_focus(p.region)}
+        if self.config.get("watch_new_pids", True):
+            # A PID created after the baseline may be a sale item set up ahead
+            # of time: watch its stock whatever the ISP, so the opening alerts.
+            for pid in new_pids:
+                if pid in products:
+                    products[pid].metadata["found_after_baseline"] = int(self._now())
+                    products[pid].metadata["stock_watched"] = True
 
         checked = self._order_checks(products, new_pids, visible, hidden_groups, feed_round)
         self._feed_details(products, new_pids)
@@ -663,7 +678,9 @@ class TcscloudProvider(BaseProvider):
                 product.available = result["status"] == "available"
             if result.get("pricing"):
                 product.pricing = result["pricing"]
-                if not product.metadata.get("listed"):
+                # The feed price (a real total) wins; the order page shows
+                # month-equivalent figures.
+                if not product.metadata.get("listed") and product.price is None:
                     cycle, label = next(iter(result["pricing"].items()))
                     product.billing_cycle = cycle
                     product.price = label.rsplit(" - ", 1)[-1] if label else product.price
@@ -700,9 +717,11 @@ class TcscloudProvider(BaseProvider):
         available: Optional[bool] = stock > 0 if by_card else None
         pricing: Dict[str, str] = {}
         if old is not None:
-            for key in ("order_checked_at", "order_page"):
+            for key in ("order_checked_at", "order_page", "found_after_baseline"):
                 if key in old.metadata:
                     metadata[key] = old.metadata[key]
+            if metadata.get("found_after_baseline") and self.config.get("watch_new_pids", True):
+                metadata["stock_watched"] = True
             pricing = dict(old.pricing)
             if (
                 not by_card
@@ -735,6 +754,8 @@ class TcscloudProvider(BaseProvider):
         metadata: Dict[str, Any] = {
             "listed": False,
             "discovery": {"type": "feed", "hidden": True, "source": "productsinfo_feed"},
+            # Telegram titles a new one as a hidden, possibly pre-sale, link.
+            "hidden_direct_link": True,
             "stock_source": "order_page",
             "stock_watched": self._watched(name),
         }
@@ -748,7 +769,7 @@ class TcscloudProvider(BaseProvider):
             metadata=metadata,
         )
         if old is not None:
-            for key in ("order_checked_at", "order_page", "order_group"):
+            for key in ("order_checked_at", "order_page", "order_group", "found_after_baseline"):
                 if key in old.metadata:
                     metadata[key] = old.metadata[key]
             product.pricing = dict(old.pricing)
@@ -762,7 +783,9 @@ class TcscloudProvider(BaseProvider):
                 for key in ("feed_read", "description"):
                     if key in old.metadata:
                         metadata[key] = old.metadata[key]
-            metadata["stock_watched"] = self._watched(name, metadata.get("description"))
+            metadata["stock_watched"] = self._watched(name, metadata.get("description")) or bool(
+                metadata.get("found_after_baseline") and self.config.get("watch_new_pids", True)
+            )
             if metadata["stock_watched"] and old.metadata.get("stock_source") == "order_page":
                 product.available = old.available
             # An unwatched PID is never re-read, so an old reading would go stale.

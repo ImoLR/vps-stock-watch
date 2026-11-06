@@ -8,6 +8,7 @@ from watcher.diff import compare_products
 from watcher.models import Change, ChangeType
 from watcher.providers import build_provider
 from watcher.providers.base import FetchError, ParseError
+from watcher.telegram import format_change
 from watcher.providers.tcscloud import (
     parse_category,
     parse_order_page,
@@ -447,6 +448,45 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(["listing"], moves[0].fields)
         self.assertTrue(watcher.should_notify(moves[0]))
         self.assertIn("110", by_id(after))
+
+    def test_pid_created_after_baseline_is_watched_whatever_the_isp(self):
+        site = FakeSite(self.feed())
+        watcher = self.seednet_only(site)
+        watcher.fetch_products()
+        site.feed[120] = ("PROMO-HINET-1G", {"annually": "$99.00 USD"})
+        first = watcher.fetch_products()
+        new = by_id(first)["120"]
+        self.assertTrue(new.metadata["stock_watched"])
+        self.assertFalse(new.available)
+        self.assertEqual("$99.00 USD", new.price)
+        self.assertIn(
+            "隐藏新品",
+            format_change(Change(ChangeType.NEW, new), []).splitlines()[0],
+        )
+        # It opens later: the restock alerts although it is not SeedNet.
+        site.orderable.add(120)
+        watcher._now.return_value += 1800
+        second = watcher.fetch_products()
+        restock = [
+            c for c in compare_products(first, second)
+            if c.product.product_id == "120" and watcher.should_notify(c)
+        ]
+        self.assertEqual([ChangeType.RESTOCK], [c.type for c in restock])
+
+    def test_new_store_product_counts_as_new_too(self):
+        site = FakeSite(self.feed())
+        watcher = self.seednet_only(site)
+        watcher.fetch_products()
+        html = site.pages["taiwan-vps-fixed"]
+        site.pages["taiwan-vps-fixed"] = html.replace('id="product114"', 'id="product130"').replace(
+            "product114-", "product130-"
+        )
+        products = by_id(watcher.fetch_products())
+        self.assertIn("130", watcher.last_scan_stats["new_pids"])
+        self.assertTrue(products["130"].metadata["stock_watched"])
+        self.assertNotIn(
+            "隐藏新品", format_change(Change(ChangeType.NEW, products["130"]), []).splitlines()[0]
+        )
 
     def test_first_order_page_prices_do_not_alert(self):
         site = FakeSite(self.feed(), orderable={109})

@@ -618,6 +618,8 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
         ChangeType.NAME: "✏️ %s 商品名称变化" % provider,
         ChangeType.REMOVED: "🗑 %s 商品下架" % provider,
     }
+    if change.type == ChangeType.NEW and product.metadata.get("hidden_direct_link"):
+        headings[ChangeType.NEW] = "🕵️ %s 发现隐藏新品（未上架，可能是提前准备的活动直链）" % provider
     if "listing" in (getattr(change, "fields", None) or []):
         # A known PID moved onto / off the store menu (TCSCloud).
         headings[ChangeType.NEW] = "🛒 %s 商品上架到店面" % provider

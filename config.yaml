@@ -261,6 +261,9 @@ providers:
     # checks only for SeedNet (遠傳 FET) products. New PIDs, removals and
     # store-front moves are still reported for every product.
     stock_watch_keywords: [seednet, seed-, fet-, -fet]
+    # A PID created after the baseline (possible pre-made sale link) is watched
+    # too, whatever the ISP, so its opening alerts.
+    watch_new_pids: true
     # The hidden "legacy" group holds only HiNet/KBT items; its PIDs stay
     # tracked through the feed.
     read_hidden_groups: false
