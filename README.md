@@ -243,6 +243,13 @@ socks5（gid=11）新增 3 个一次性 ¥0.00 商品，完整扫描只需 2 个
 
 ### CloudIPLC（云际互联）
 
+**2026-11-07 起停用**：用户要求移除 CloudIPLC 监控，`config.yaml` 里 `enabled: false`。
+Provider 代码、测试和下面的说明都保留；要恢复时改回 `enabled: true` 并重启服务即可。
+停用前查到的情况：Wayback 存档显示 159“IPLC TY-NAT 9周年”最早 2025-11-09、160
+“IPLC TY-NAT 双12活动款”最早 2025-12-11，都是去年的活动号，此后没有新建 PID；而 2026
+双十一的 pid 125 是 2019 年就存在的旧号改名重开，所以只探测更大 PID 会漏掉这种改名复用的
+活动链接，恢复时要考虑定期复查旧号名称。
+
 2026-11-02 接入。`https://www.cloudiplc.com/` 是 WHMCS + NeWorld-New 订购模板，前面套了
 腾讯 EdgeOne。卖泉州 CN2 VPS、沪日 IPLC NAT（上海 BGP → 东京 NTT+BBIX）、沪日/深港
 IPLC 独服，以及日本、香港、洛杉矶、大陆独服。

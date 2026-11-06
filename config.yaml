@@ -178,9 +178,10 @@ providers:
   # the 3 PIDs above the highest seen; one no group lists is a hidden direct
   # link. Stock lives only on the EdgeOne-guarded cart.php?a=add (isolated
   # Chromium), so that check is off. Never retried on a block page.
+  # Disabled 2026-11-07 at the user's request; code kept for a later rerun.
   - name: cloudiplc
     type: cloudiplc
-    enabled: true
+    enabled: false
     base_url: https://www.cloudiplc.com/
     interval_seconds: 300
     timeout_seconds: 30
