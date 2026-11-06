@@ -126,6 +126,15 @@ SeedNet，不分大小写，`Seed Net` 也算）和年付商品（卡片付款�
 
 ### FACHOST
 
+**2026-11-07 起停用**：用户要求关闭 FACHOST 页面监控，`config.yaml` 里 `enabled: false`。
+Provider 代码、测试和下面的说明都保留；要恢复时改回 `enabled: true` 并重启服务即可。
+停用前查到的情况：隐藏分类的分类页返回 404，但其中商品的直接链接照样能下单（例如
+`/products/custom/tw-mobiledata/checkout`，Product 14 / Category 10）；公开分类只有 ID
+1/12/13，Paymenter 没有按 ID 列商品的公开接口，隐藏商品无法从外部枚举。2025 双 11 是公告页
+加 8 折码 `HKTHAAPY1`；2025 黑五是单独的隐藏商品“Seednet-VDS-1 Black Friday 2025”
+（$28.49），链接应在官方 Telegram 群里发布。售罄商品的 checkout 会 302 跳走，看不到年付等
+付款周期选项。
+
 FACHOST 官方主站和公开商城位于 `https://fachost.cloud/`，使用 Paymenter + Livewire，
 不是 WHMCS。公开商品分类使用 `https://fachost.cloud/products/<category-slug>`，购物车为
 `https://fachost.cloud/cart`，可购买商品的直接结账路径为

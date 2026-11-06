@@ -115,9 +115,11 @@ providers:
     max_categories: 100
     max_backoff_seconds: 1800
 
+  # Disabled 2026-11-07 at the user's request: sale items are hidden links
+  # posted in FACHOST's Telegram group, not on the store pages. Code kept.
   - name: fachost
     type: fachost
-    enabled: true
+    enabled: false
     base_url: https://fachost.cloud/
     interval_seconds: 300
     timeout_seconds: 25
