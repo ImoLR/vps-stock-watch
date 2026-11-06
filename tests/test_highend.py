@@ -304,6 +304,14 @@ class StateTests(unittest.TestCase):
         self.assertTrue(instance.should_notify(Change(ChangeType.PRICE, newer, new, ["price", "pricing"])))
         self.assertTrue(instance.should_notify(Change(ChangeType.NEW, new)))
 
+    def test_price_appearing_on_read_unpriced_product_alerts(self):
+        instance = provider(FakeSite({}))
+        pending = Product("highend", "22", "So-Net.Peony", metadata={"priced_at": 1})
+        opened = Product(
+            "highend", "22", "So-Net.Peony", price="$240.00 USD", pricing={"annually": "$240.00 USD"}
+        )
+        self.assertTrue(instance.should_notify(Change(ChangeType.PRICE, opened, pending, ["price", "pricing"])))
+
 
 if __name__ == "__main__":
     unittest.main()

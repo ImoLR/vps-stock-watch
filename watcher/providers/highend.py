@@ -146,11 +146,13 @@ class HighendProvider(BaseProvider):
         if not any(self._in_focus(product.region) for product in products):
             return False
         # Prices are filled in lazily after the baseline walk; the first fill
-        # is not a price change.
+        # is not a price change. A product already read with no price at all
+        # (a sale item not open yet) does alert when it gets one.
         if (
             change.type == ChangeType.PRICE
             and change.old is not None
             and not change.old.pricing
+            and not change.old.metadata.get("priced_at")
         ):
             return False
         return super().should_notify(change)
