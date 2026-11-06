@@ -1,0 +1,25 @@
+[Unit]
+Description=FACHOST Telegram channel/group relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/projects/vps-stock-watch/vps-stock-watch
+EnvironmentFile=/root/projects/vps-stock-watch/vps-stock-watch/.env
+ExecStart=/root/projects/vps-stock-watch/vps-stock-watch/.venv/bin/python -m watcher.fac_tg_watch --config /root/projects/vps-stock-watch/vps-stock-watch/config.yaml
+Restart=on-failure
+RestartSec=30s
+# Exit 3 = the Telegram login was revoked; restarting cannot fix that.
+RestartPreventExitStatus=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/root/projects/vps-stock-watch/vps-stock-watch/data
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target

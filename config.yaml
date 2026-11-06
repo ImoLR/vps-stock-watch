@@ -40,6 +40,19 @@ route_watch:
       expected_asn: AS56040
       expected_prefix: 211.136.192.0/18
 
+# FACHOST Telegram relay (watcher.fac_tg_watch, its own systemd unit). A
+# logged-in user session in data/tg (not in git) reads the vendor channel and
+# group; the watcher bot posts the copies. Telegram pushes messages, so there
+# is no poll interval; the channel is re-read every 10 min only to catch up.
+fac_tg_watch:
+  enabled: true
+  session_dir: data/tg
+  channel_id: -1002582634785
+  channel_username: fachost_cloud
+  group_id: -1002306171240
+  catch_up_seconds: 600
+  admin_refresh_seconds: 3600
+
 suspicious_keywords:
   - test
   - beta
@@ -133,6 +146,21 @@ providers:
     # absent from the current storefront navigation. A 404 here means it was removed.
     extra_product_urls:
       - https://fachost.cloud/products/tw-hinet-vds/hinet-vds-lite/checkout
+
+  # FACHOST hidden sale category (user, 2026-11-07). Black Friday 2025 and
+  # the 2026 anniversary (SeedNet annual plans) were sold from
+  # products/special-regulations, which is 404 between sales. One request
+  # per round while closed (~290/day); while open, one more per in-stock
+  # product to read its billing plans (monthly / annual ...).
+  - name: fachost_sale
+    type: fachost_sale
+    enabled: true
+    base_url: https://fachost.cloud/
+    categories: [special-regulations]
+    interval_seconds: 300
+    timeout_seconds: 25
+    request_spacing_seconds: 5
+    max_backoff_seconds: 3600
 
   - name: leikwanhost
     type: leikwanhost

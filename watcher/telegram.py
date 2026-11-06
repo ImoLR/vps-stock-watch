@@ -596,6 +596,25 @@ def format_interval_invalid(minimum: int, maximum: int) -> str:
 def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
     product, old = change.product, change.old
     provider = _provider_name(product.provider)
+    if product.metadata.get("catalog_event") == "sale_category":
+        is_open = bool(product.available)
+        if change.type == ChangeType.NEW:
+            heading = "🆕 %s 新增监控活动分类" % provider
+        elif is_open:
+            heading = "🎉 %s 活动分类已开放" % provider
+        else:
+            heading = "🔒 %s 活动分类已关闭" % provider
+        lines = [
+            "<b>%s</b>" % html.escape(heading),
+            "",
+            "分类：%s" % html.escape(product.name),
+            "状态：%s" % ("已开放" if is_open else "未开放（404）"),
+        ]
+        if is_open and product.metadata.get("product_count") is not None:
+            lines.append("商品数：%s" % product.metadata["product_count"])
+        if product.url:
+            lines.extend(["", '<a href="%s">打开活动分类</a>' % html.escape(product.url, quote=True)])
+        return "\n".join(lines)
     if (
         change.type == ChangeType.NEW
         and product.metadata.get("catalog_event") == "region"
@@ -1087,6 +1106,7 @@ def _provider_name(value: str) -> str:
         "boilcloud": "BOILCLOUD",
         "cloudiplc": "CloudIPLC",
         "fachost": "FACHOST",
+        "fachost_sale": "FACHOST 活动",
         "highend": "HighEnd",
         "leikwanhost": "LeiKwanHost",
         "liqunhuiju": "利群汇聚",

@@ -8,6 +8,7 @@ from .boilcloud import BoilcloudProvider
 from .cloudiplc import CloudiplcOrderCheck, CloudiplcProvider
 from .dmit import DmitProvider
 from .fachost import FachostProvider
+from .fachost_sale import FachostSaleProvider
 from .generic import GenericProvider
 from .highend import HighendProvider
 from .leikwanhost import LeikwanhostProvider
@@ -31,6 +32,7 @@ def build_provider(config: Dict[str, Any]) -> BaseProvider:
         "nnb": NnbProvider,
         "dmit": DmitProvider,
         "fachost": FachostProvider,
+        "fachost_sale": FachostSaleProvider,
         "highend": HighendProvider,
         "leikwanhost": LeikwanhostProvider,
         "liqunhuiju": LiqunHuijuProvider,
@@ -50,6 +52,7 @@ __all__ = [
     "BoilcloudProvider",
     "CloudiplcProvider",
     "FachostProvider",
+    "FachostSaleProvider",
     "HighendProvider",
     "LeikwanhostProvider",
     "LiqunHuijuProvider",

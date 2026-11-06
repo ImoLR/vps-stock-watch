@@ -144,6 +144,30 @@ Provider 代码、测试和下面的说明都保留；要恢复时改回 `enable
 （$28.49），链接应在官方 Telegram 群里发布。售罄商品的 checkout 会 302 跳走，看不到年付等
 付款周期选项。
 
+**FACHOST 活动监控（2026-11-07 起）**：分两部分。
+
+1. `fachost_sale` Provider 每 300 秒请求一次
+   `https://fachost.cloud/products/special-regulations`。2025 黑五和 2026 一周年庆
+   （SeedNet/HiNet 月付/季付/年付）都从这个隐藏分类卖，平时返回 404。
+   - 分类本身记成一个伪商品 `category:special-regulations`；404 → 能打开时推送“活动分类已开放”。
+   - 分类开放时，每张商品卡都当作商品监控；有货商品再打开 checkout，把 `select#plan_id` 的
+     付款周期（如 `年付 - $246,99`）存进 `pricing`。售罄后 checkout 会跳走，这时沿用上次读到的
+     周期，不当作价格变化。
+   - 遇到 403/429/challenge 不重试，直接走失败退避。
+2. `watcher.fac_tg_watch`（`deploy/fac-tg-watch.service`，独立服务）用已登录的 TG 用户会话
+   读公告频道 `@fachost_cloud` 和聊天群「Fachost💪躺平每一天」，由 watcher bot 把副本发到
+   `TELEGRAM_CHAT_ID`。
+   - Telegram 是推送的，没有轮询间隔；每 10 分钟补读一次频道，补上断线期间漏掉的帖子。
+   - 频道：每条新帖都转发；改了文字的编辑也转发。
+   - 群：转发含 `fachost.cloud` 链接的消息，以及群管理员（真人，或 `fac_*` 机器人）发的带活动
+     关键词的消息；频道自动转发进群的帖子跳过。
+   - 只读：不发言、不点按钮、不标已读。
+   - 会话文件、`user.env`（api_id/api_hash/手机号）、`login.py`、`relay_state.json` 都在
+     `data/tg/`（0600，不进 git）。
+   - 登录失效时推送“登录已失效”并以退出码 3 停止，systemd 不会无限重启。重新登录：
+     `cd data/tg && ../../.venv/bin/python login.py send-code`，再执行
+     `login.py sign-in <验证码>`；开了两步验证的话，再执行 `login.py password` 并从 stdin 输入密码。
+
 FACHOST 官方主站和公开商城位于 `https://fachost.cloud/`，使用 Paymenter + Livewire，
 不是 WHMCS。公开商品分类使用 `https://fachost.cloud/products/<category-slug>`，购物车为
 `https://fachost.cloud/cart`，可购买商品的直接结账路径为
