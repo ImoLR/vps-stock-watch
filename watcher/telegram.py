@@ -618,6 +618,10 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
         ChangeType.NAME: "✏️ %s 商品名称变化" % provider,
         ChangeType.REMOVED: "🗑 %s 商品下架" % provider,
     }
+    if "listing" in (getattr(change, "fields", None) or []):
+        # A known PID moved onto / off the store menu (TCSCloud).
+        headings[ChangeType.NEW] = "🛒 %s 商品上架到店面" % provider
+        headings[ChangeType.REMOVED] = "📤 %s 商品从店面下架（直链可能仍能下单）" % provider
     lines = ["<b>%s</b>" % html.escape(headings[change.type]), ""]
     lines.append("名称：%s" % html.escape(product.name))
     lines.append("ID / PID：%s" % html.escape(product.product_id))

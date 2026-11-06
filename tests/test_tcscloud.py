@@ -373,6 +373,81 @@ class ScanTests(unittest.TestCase):
         watcher = provider(site, order_check_batch=10)
         self.assertTrue(by_id(watcher.fetch_products())["116"].available)
 
+    def seednet_only(self, site, **overrides):
+        return provider(
+            site,
+            stock_watch_keywords=["seednet", "seed-", "fet-", "-fet"],
+            read_hidden_groups=False,
+            order_check_batch=10,
+            **overrides
+        )
+
+    def test_only_seednet_products_are_watched(self):
+        feed = self.feed()
+        feed[105] = ("SEEDNET-DYN-300M", {})
+        site = FakeSite(feed, orderable={109, 119}, retired={105, 107})
+        watcher = self.seednet_only(site, feed_start_pid=104)
+        products = by_id(watcher.fetch_products())
+        watched = {pid for pid, p in products.items() if p.metadata["stock_watched"]}
+        # DS1-SEEDNET (slug s1-fet-...), FS1-SEEDNET and the retired SEEDNET PID.
+        self.assertEqual({"105", "111", "112"}, watched)
+        self.assertIn(BASE + "cart.php?a=add&pid=105", site.order_calls())
+        for pid in ("107", "109", "116", "119"):
+            self.assertNotIn(BASE + "cart.php?a=add&pid=%s" % pid, site.order_calls())
+        self.assertIsNone(products["109"].available)
+        # Card stock is free, so it stays readable for every product.
+        self.assertEqual(9, products["110"].stock)
+
+    def test_unwatched_stock_and_price_changes_are_silent(self):
+        site = FakeSite(self.feed())
+        watcher = self.seednet_only(site)
+        before = watcher.fetch_products()
+        html = site.pages["taiwan-vps-dynamic"]
+        html = html.replace("9 可用", "8 可用", 1).replace("$59.99 USD", "$49.99 USD")
+        # DS1-SEEDNET-300M restocks.
+        start = html.index('id="product111"')
+        html = html[:start] + html[start:].replace("0 可用", "2 可用", 1)
+        site.pages["taiwan-vps-dynamic"] = html
+        after = watcher.fetch_products()
+        sent = {
+            (c.product.product_id, c.type)
+            for c in compare_products(before, after)
+            if watcher.should_notify(c)
+        }
+        self.assertEqual({("111", ChangeType.RESTOCK)}, sent)
+
+    def test_new_and_removed_products_always_alert(self):
+        site = FakeSite(self.feed())
+        watcher = self.seednet_only(site)
+        before = watcher.fetch_products()
+        site.feed[120] = ("DH9-HINET-PROMO", {"monthly": "$9.00 USD"})
+        site.orderable.add(120)
+        after = watcher.fetch_products()
+        changes = [c for c in compare_products(before, after) if watcher.should_notify(c)]
+        new = [c for c in changes if c.type == ChangeType.NEW]
+        self.assertEqual(["120"], [c.product.product_id for c in new])
+        self.assertTrue(new[0].product.available)
+        self.assertEqual("$9.00 USD", new[0].product.price)
+        removed = Change(ChangeType.REMOVED, before[0], before[0])
+        self.assertTrue(watcher.should_notify(removed))
+
+    def test_store_front_moves_alert_for_every_product(self):
+        site = FakeSite(self.feed())
+        watcher = self.seednet_only(site)
+        before = watcher.fetch_products()
+        state = {"products": {p.key: p.to_dict() for p in before}}
+        html = site.pages["taiwan-vps-dynamic"]
+        start = html.index('<div class="product clearfix" id="product110">')
+        end = html.index('<div class="product clearfix" id="product117">')
+        site.pages["taiwan-vps-dynamic"] = html[:start] + html[end:]
+        site.feed[110] = ("DH2-HINET-1000M DYN", {})
+        after = watcher.fetch_products()
+        moves = watcher.additional_changes(after, state)
+        self.assertEqual([("110", ChangeType.REMOVED)], [(c.product.product_id, c.type) for c in moves])
+        self.assertEqual(["listing"], moves[0].fields)
+        self.assertTrue(watcher.should_notify(moves[0]))
+        self.assertIn("110", by_id(after))
+
     def test_first_order_page_prices_do_not_alert(self):
         site = FakeSite(self.feed(), orderable={109})
         watcher = provider(site, order_check_batch=10)

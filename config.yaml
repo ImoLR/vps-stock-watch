@@ -230,8 +230,8 @@ providers:
 
   # TCSCloud (Taipei home-broadband VPS): category cards carry "N 可用"; hidden
   # and direct-link PIDs come from the productsinfo feed and their order pages.
-  # ~2k requests/day: 4 categories + hidden groups every round, feed probes
-  # every 3rd round, order pages for untracked/hidden PIDs every 30 min.
+  # ~1.6k requests/day: 4 categories every round, feed probes every 3rd
+  # round, order pages only for SeedNet PIDs (and once for a new PID).
   - name: tcscloud
     type: tcscloud
     enabled: true
@@ -257,6 +257,13 @@ providers:
     price_refresh_seconds: 21600
     # Not VPS: 24 TCP-BBR add-on, 89 TWNIC IP rental, 90 dedicated/colocation.
     ignore_pids: [24, 89, 90]
+    # 2026-11-06 user: stock / restock / sold-out / price alerts and order-page
+    # checks only for SeedNet (遠傳 FET) products. New PIDs, removals and
+    # store-front moves are still reported for every product.
+    stock_watch_keywords: [seednet, seed-, fet-, -fet]
+    # The hidden "legacy" group holds only HiNet/KBT items; its PIDs stay
+    # tracked through the feed.
+    read_hidden_groups: false
     minimum_categories: 4
     minimum_products: 5
     stock_count_alerts: true

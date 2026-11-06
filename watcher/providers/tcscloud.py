@@ -260,6 +260,19 @@ class TcscloudProvider(BaseProvider):
     def _ignored(self) -> Set[str]:
         return {str(pid) for pid in self.config.get("ignore_pids") or []}
 
+    def _watched(self, *texts: Optional[str]) -> bool:
+        """Whether a product gets stock work and stock/price alerts.
+
+        ``stock_watch_keywords`` (2026-11-06: SeedNet only) are matched in the
+        name, description and store link. Without the setting every product is
+        watched.
+        """
+        keywords = [str(item).casefold() for item in self.config.get("stock_watch_keywords") or []]
+        if not keywords:
+            return True
+        haystack = " ".join(text for text in texts if text).casefold()
+        return any(keyword in haystack for keyword in keywords)
+
     # -- state -----------------------------------------------------------------
 
     def restore_state(self, provider_state: Dict[str, Any]) -> None:
@@ -282,7 +295,41 @@ class TcscloudProvider(BaseProvider):
             "hidden_groups": sorted(self._hidden_groups),
         }
 
+    def additional_changes(
+        self, products: List[Product], previous_state: Dict[str, Any]
+    ) -> List[Change]:
+        """Store-front moves: a known PID shown in, or dropped from, the store menu.
+
+        A PID that leaves the menu but is still orderable by direct link is not
+        a removal in the diff, and a hidden PID put on the store is not new, so
+        both are reported here (``fields == ["listing"]``).
+        """
+        old_products = {}
+        for item in (previous_state.get("products") or {}).values():
+            product = Product.from_dict(item)
+            old_products[product.product_id] = product
+        changes: List[Change] = []
+        for product in products:
+            old = old_products.get(product.product_id)
+            if old is None:
+                continue
+            was = bool(old.metadata.get("category_visible"))
+            now = bool(product.metadata.get("category_visible"))
+            if was != now:
+                kind = ChangeType.NEW if now else ChangeType.REMOVED
+                changes.append(Change(kind, product, old, ["listing"]))
+        return changes
+
     def should_notify(self, change: Change) -> bool:
+        # New PIDs, removals and store-front moves are always reported; stock,
+        # price and name changes only for watched products (SeedNet).
+        if change.type in (ChangeType.NEW, ChangeType.REMOVED):
+            return super().should_notify(change)
+        if not (
+            change.product.metadata.get("stock_watched", True)
+            or (change.old is not None and change.old.metadata.get("stock_watched") is True)
+        ):
+            return False
         # Order-page prices arrive after the product is first seen; the first
         # fill is not a price change.
         if (
@@ -411,7 +458,9 @@ class TcscloudProvider(BaseProvider):
             )
         hidden_groups.update(str(slug) for slug in self.config.get("extra_categories") or [])
         hidden_groups.difference_update(visible)
-        for slug in sorted(hidden_groups):
+        # Groups are still learned (and kept in state) when not read.
+        reading = sorted(hidden_groups) if self.config.get("read_hidden_groups", True) else []
+        for slug in reading:
             try:
                 html, final_url = self._get(self.base_url + CATEGORY_PATH % slug, final_url=True)
                 path = STORE_PATH.search(unquote(final_url))
@@ -426,7 +475,7 @@ class TcscloudProvider(BaseProvider):
                 continue
             labels[slug] = slug
             self._add_cards(listed, cards, slug)
-        return listed, {slug: labels.get(slug) or slug for slug in done | hidden_groups}, visible
+        return listed, {slug: labels.get(slug) or slug for slug in done | set(reading)}, visible
 
     @staticmethod
     def _add_cards(listed: Dict[str, Dict[str, Any]], cards: List[Dict[str, Any]], slug: str) -> None:
@@ -530,6 +579,7 @@ class TcscloudProvider(BaseProvider):
                 if not product.metadata.get("listed")
                 and not product.metadata.get("feed_read")
                 and product.metadata.get("order_page") in ("available", "sold_out")
+                and (product.metadata["stock_watched"] or pid in new_pids)
             ),
             key=lambda pid: (pid not in new_pids, int(pid)),
         )
@@ -562,6 +612,7 @@ class TcscloudProvider(BaseProvider):
     ) -> List[str]:
         """Read order pages: stock for products without a card count, prices for all.
 
+        Only watched products are re-read (new PIDs get one look either way).
         Retired products are re-read only every ``retired_check_seconds``; one
         that comes back shows up as a restock. A sold-out page names the
         product's group; a group missing from the menu is read as a hidden
@@ -574,7 +625,11 @@ class TcscloudProvider(BaseProvider):
         due: List[Tuple[int, float, int, str]] = []
         for pid, product in products.items():
             last = float(product.metadata.get("order_checked_at") or 0)
-            if product.metadata.get("stock_source") == "order_page":
+            if not product.metadata["stock_watched"]:
+                # Unwatched: one look when the PID first appears, for the alert.
+                if pid in new_pids:
+                    due.append((0, last, int(pid), pid))
+            elif product.metadata.get("stock_source") == "order_page":
                 every = retired_every if product.metadata.get("order_page") == "retired" else stock_every
                 if pid in new_pids or now - last >= every:
                     due.append((0 if pid in new_pids else 1, last, int(pid), pid))
@@ -640,6 +695,7 @@ class TcscloudProvider(BaseProvider):
             "description": "\n".join(item["description"]),
             "price_from": item["price_from"],
             "stock_source": "category_card" if by_card else "order_page",
+            "stock_watched": self._watched(item["name"], item["card_url"], "\n".join(item["description"])),
         }
         available: Optional[bool] = stock > 0 if by_card else None
         pricing: Dict[str, str] = {}
@@ -648,7 +704,11 @@ class TcscloudProvider(BaseProvider):
                 if key in old.metadata:
                     metadata[key] = old.metadata[key]
             pricing = dict(old.pricing)
-            if not by_card and old.metadata.get("stock_source") == "order_page":
+            if (
+                not by_card
+                and metadata["stock_watched"]
+                and old.metadata.get("stock_source") == "order_page"
+            ):
                 available = old.available
         name = item["name"]
         label = labels.get(item["category_slug"], item["category_slug"])
@@ -676,6 +736,7 @@ class TcscloudProvider(BaseProvider):
             "listed": False,
             "discovery": {"type": "feed", "hidden": True, "source": "productsinfo_feed"},
             "stock_source": "order_page",
+            "stock_watched": self._watched(name),
         }
         product = Product(
             provider=self.name,
@@ -691,19 +752,20 @@ class TcscloudProvider(BaseProvider):
                 if key in old.metadata:
                     metadata[key] = old.metadata[key]
             product.pricing = dict(old.pricing)
-            if old.metadata.get("stock_source") == "order_page":
-                product.available = old.available
-            if not old.metadata.get("listed"):
-                product.price = old.price
-                product.billing_cycle = old.billing_cycle
-                product.specs = dict(old.specs)
+            product.price = old.price
+            product.billing_cycle = old.billing_cycle
+            product.specs = dict(old.specs)
+            if old.metadata.get("listed"):
+                # It was listed until now: keep what the card said.
+                metadata["description"] = old.metadata.get("description")
+            else:
                 for key in ("feed_read", "description"):
                     if key in old.metadata:
                         metadata[key] = old.metadata[key]
-            else:
-                # It was listed until now: keep what the card said.
-                product.specs = dict(old.specs)
-                metadata["description"] = old.metadata.get("description")
+            metadata["stock_watched"] = self._watched(name, metadata.get("description"))
+            if metadata["stock_watched"] and old.metadata.get("stock_source") == "order_page":
+                product.available = old.available
+            # An unwatched PID is never re-read, so an old reading would go stale.
         return product
 
     # -- HTTP ----------------------------------------------------------------------
