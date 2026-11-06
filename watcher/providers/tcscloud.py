@@ -302,7 +302,8 @@ class TcscloudProvider(BaseProvider):
 
         A PID that leaves the menu but is still orderable by direct link is not
         a removal in the diff, and a hidden PID put on the store is not new, so
-        both are reported here (``fields == ["listing"]``).
+        both are reported here (``fields == ["listing"]``). Watched products
+        also report spec / category / description edits as ``DETAILS``.
         """
         old_products = {}
         for item in (previous_state.get("products") or {}).values():
@@ -318,6 +319,19 @@ class TcscloudProvider(BaseProvider):
             if was != now:
                 kind = ChangeType.NEW if now else ChangeType.REMOVED
                 changes.append(Change(kind, product, old, ["listing"]))
+            if product.metadata.get("stock_watched"):
+                # Anything else about a watched product: specs, category, text.
+                fields = []
+                if old.specs and product.specs and old.specs != product.specs:
+                    fields.append("specs")
+                if old.category != product.category and was == now:
+                    fields.append("category")
+                old_text = old.metadata.get("description")
+                new_text = product.metadata.get("description")
+                if old_text and new_text and old_text != new_text:
+                    fields.append("description")
+                if fields:
+                    changes.append(Change(ChangeType.DETAILS, product, old, fields))
         return changes
 
     def should_notify(self, change: Change) -> bool:
@@ -402,6 +416,7 @@ class TcscloudProvider(BaseProvider):
 
         checked = self._order_checks(products, new_pids, visible, hidden_groups, feed_round)
         self._feed_details(products, new_pids)
+        priced = self._feed_prices(products)
 
         result = [products[pid] for pid in sorted(products, key=int)]
         minimum = max(1, int(self.config.get("minimum_products", 1)))
@@ -429,6 +444,7 @@ class TcscloudProvider(BaseProvider):
             "high_water_pid": high_water,
             "new_pids": new_pids,
             "order_checks": checked,
+            "feed_prices": priced,
             "requests": self._requests,
             "duration_seconds": round(time.monotonic() - started, 3),
         }
@@ -611,7 +627,7 @@ class TcscloudProvider(BaseProvider):
             product.metadata["description"] = "\n".join(lines)
             for cycle in ("monthly", "quarterly", "semiannually", "annually"):
                 price = parse_price(self._feed(int(pid), "price", billingcycle=cycle))
-                if price is not None:
+                if price is not None and price != NOT_FOUND:
                     product.price = price
                     product.billing_cycle = CYCLE_KEYS[cycle]
                     break
@@ -625,7 +641,7 @@ class TcscloudProvider(BaseProvider):
         hidden_groups: Set[str],
         everything: bool = False,
     ) -> List[str]:
-        """Read order pages: stock for products without a card count, prices for all.
+        """Read order pages for stock of watched products without a card count.
 
         Only watched products are re-read (new PIDs get one look either way).
         Retired products are re-read only every ``retired_check_seconds``; one
@@ -636,7 +652,6 @@ class TcscloudProvider(BaseProvider):
         now = self._now()
         stock_every = max(60, int(self.config.get("order_check_seconds", 1800)))
         retired_every = max(stock_every, int(self.config.get("retired_check_seconds", 21600)))
-        price_every = max(stock_every, int(self.config.get("price_refresh_seconds", 21600)))
         due: List[Tuple[int, float, int, str]] = []
         for pid, product in products.items():
             last = float(product.metadata.get("order_checked_at") or 0)
@@ -648,10 +663,9 @@ class TcscloudProvider(BaseProvider):
                 every = retired_every if product.metadata.get("order_page") == "retired" else stock_every
                 if pid in new_pids or now - last >= every:
                     due.append((0 if pid in new_pids else 1, last, int(pid), pid))
-            elif (product.stock or 0) > 0 and now - last >= price_every:
-                # Card stock is fresh every round; the order page only adds the
-                # per-cycle prices, and a sold-out one shows none.
-                due.append((2, last, int(pid), pid))
+            elif pid in new_pids:
+                # A new card-counted product: one look for the group / status.
+                due.append((0, last, int(pid), pid))
         due.sort()
         batch = len(due) if everything else max(0, int(self.config.get("order_check_batch", 2)))
         picked = [item[3] for item in due if item[0] == 0]
@@ -676,14 +690,42 @@ class TcscloudProvider(BaseProvider):
                     hidden_groups.add(group)
             if product.metadata.get("stock_source") == "order_page":
                 product.available = result["status"] == "available"
-            if result.get("pricing"):
-                product.pricing = result["pricing"]
-                # The feed price (a real total) wins; the order page shows
-                # month-equivalent figures.
-                if not product.metadata.get("listed") and product.price is None:
-                    cycle, label = next(iter(result["pricing"].items()))
-                    product.billing_cycle = cycle
-                    product.price = label.rsplit(" - ", 1)[-1] if label else product.price
+            # Per-cycle prices come from the feed (real totals); the order page
+            # shows month-equivalent figures, so it only fills a missing price.
+            if result.get("pricing") and not product.metadata.get("listed") and product.price is None:
+                cycle, label = next(iter(result["pricing"].items()))
+                product.billing_cycle = cycle
+                product.price = label.rsplit(" - ", 1)[-1] if label else product.price
+        return picked
+
+    def _feed_prices(self, products: Dict[str, Product]) -> List[str]:
+        """Refresh per-cycle feed prices of watched, not retired products.
+
+        The feed answers every cycle whether or not the product is in stock;
+        ``feed_price_batch`` products per round, oldest first, each at most
+        every ``feed_price_seconds``.
+        """
+        now = self._now()
+        every = max(300, int(self.config.get("feed_price_seconds", 3600)))
+        due = sorted(
+            (
+                (float(p.metadata.get("feed_priced_at") or 0), int(pid), pid)
+                for pid, p in products.items()
+                if p.metadata["stock_watched"]
+                and p.metadata.get("order_page") != "retired"
+                and now - float(p.metadata.get("feed_priced_at") or 0) >= every
+            )
+        )
+        picked = [item[2] for item in due[: max(0, int(self.config.get("feed_price_batch", 1)))]]
+        for pid in picked:
+            product = products[pid]
+            pricing: Dict[str, str] = {}
+            for cycle in ("monthly", "quarterly", "semiannually", "annually"):
+                price = parse_price(self._feed(int(pid), "price", billingcycle=cycle))
+                if price is not None and price != NOT_FOUND:
+                    pricing[CYCLE_KEYS[cycle]] = price
+            product.pricing = pricing
+            product.metadata["feed_priced_at"] = int(now)
         return picked
 
     # -- products ----------------------------------------------------------------
@@ -717,12 +759,13 @@ class TcscloudProvider(BaseProvider):
         available: Optional[bool] = stock > 0 if by_card else None
         pricing: Dict[str, str] = {}
         if old is not None:
-            for key in ("order_checked_at", "order_page", "found_after_baseline"):
+            for key in ("order_checked_at", "order_page", "found_after_baseline", "feed_priced_at"):
                 if key in old.metadata:
                     metadata[key] = old.metadata[key]
             if metadata.get("found_after_baseline") and self.config.get("watch_new_pids", True):
                 metadata["stock_watched"] = True
-            pricing = dict(old.pricing)
+            # Only watched products keep feed prices; nothing refreshes the rest.
+            pricing = dict(old.pricing) if metadata["stock_watched"] else {}
             if (
                 not by_card
                 and metadata["stock_watched"]
@@ -769,7 +812,13 @@ class TcscloudProvider(BaseProvider):
             metadata=metadata,
         )
         if old is not None:
-            for key in ("order_checked_at", "order_page", "order_group", "found_after_baseline"):
+            for key in (
+                "order_checked_at",
+                "order_page",
+                "order_group",
+                "found_after_baseline",
+                "feed_priced_at",
+            ):
                 if key in old.metadata:
                     metadata[key] = old.metadata[key]
             product.pricing = dict(old.pricing)
@@ -788,6 +837,8 @@ class TcscloudProvider(BaseProvider):
             )
             if metadata["stock_watched"] and old.metadata.get("stock_source") == "order_page":
                 product.available = old.available
+            if not metadata["stock_watched"]:
+                product.pricing = {}
             # An unwatched PID is never re-read, so an old reading would go stale.
         return product
 

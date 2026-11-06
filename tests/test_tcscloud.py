@@ -212,7 +212,8 @@ class ScanTests(unittest.TestCase):
         self.assertEqual("$9.99 USD", products["119"].price)
         self.assertFalse(products["107"].available)
         self.assertEqual("$59.99 USD", products["110"].price)
-        self.assertIn("年付", products["110"].pricing)
+        # Order-page cycle labels are month-equivalent; they are not prices.
+        self.assertEqual({}, products["110"].pricing)
 
     def test_unlisted_product_gets_a_feed_price_even_when_sold_out(self):
         site = FakeSite(self.feed(), orderable=())
@@ -487,6 +488,65 @@ class ScanTests(unittest.TestCase):
         self.assertNotIn(
             "隐藏新品", format_change(Change(ChangeType.NEW, products["130"]), []).splitlines()[0]
         )
+
+    def test_seednet_feed_prices_refresh_hourly_and_changes_alert(self):
+        feed = self.feed()
+        feed[111] = ("DS1-SEEDNET-300M DYN", {"monthly": "$19.99 USD", "annually": "$199.99 USD"})
+        feed[112] = ("FS1-SEEDNET-600M", {"monthly": "$49.99 USD"})
+        site = FakeSite(feed)
+        watcher = self.seednet_only(site)
+        watcher.fetch_products()
+        watcher.fetch_products()
+        first = watcher.fetch_products()
+        self.assertEqual({"月付": "$19.99 USD", "年付": "$199.99 USD"}, by_id(first)["111"].pricing)
+        self.assertEqual({"月付": "$49.99 USD"}, by_id(first)["112"].pricing)
+        self.assertEqual({}, by_id(first)["110"].pricing)
+        # Within the hour nothing is re-read.
+        site.calls.clear()
+        watcher.fetch_products()
+        self.assertEqual([], [p for p in site.feed_calls() if p["get"] == "price"])
+        feed[111][1]["annually"] = "$179.99 USD"
+        watcher._now.return_value += 3600
+        before = watcher.fetch_products()
+        after = watcher.fetch_products()
+        changes = [
+            c for c in compare_products(first, after)
+            if c.product.product_id == "111" and watcher.should_notify(c)
+        ]
+        self.assertEqual([ChangeType.PRICE], [c.type for c in changes])
+        message = format_change(changes[0], [])
+        self.assertIn("$199.99 USD → $179.99 USD", message)
+
+    def test_seednet_card_price_change_alerts(self):
+        site = FakeSite(self.feed())
+        watcher = self.seednet_only(site)
+        before = watcher.fetch_products()
+        site.pages["taiwan-vps-dynamic"] = site.pages["taiwan-vps-dynamic"].replace("$19.99 USD", "$17.99 USD")
+        after = watcher.fetch_products()
+        sent = [
+            (c.product.product_id, c.type) for c in compare_products(before, after)
+            if watcher.should_notify(c)
+        ]
+        self.assertIn(("111", ChangeType.PRICE), sent)
+
+    def test_seednet_spec_and_text_edits_alert_as_details(self):
+        site = FakeSite(self.feed())
+        watcher = self.seednet_only(site)
+        before = watcher.fetch_products()
+        state = {"products": {p.key: p.to_dict() for p in before}}
+        html = site.pages["taiwan-vps-dynamic"]
+        start = html.index('id="product111"')
+        html = html[:start] + html[start:].replace("RAM | 1.5 GB", "RAM | 2 GB", 1)
+        html = html.replace("RAM | 1.5 GB", "RAM | 3 GB", 1)  # DH1 (HiNet): not watched
+        site.pages["taiwan-vps-dynamic"] = html
+        after = watcher.fetch_products()
+        details = [c for c in watcher.additional_changes(after, state) if c.type == ChangeType.DETAILS]
+        self.assertEqual(["111"], [c.product.product_id for c in details])
+        self.assertIn("specs", details[0].fields)
+        self.assertTrue(watcher.should_notify(details[0]))
+        message = format_change(details[0], [])
+        self.assertIn("商品信息变化", message)
+        self.assertIn("1.5 GB → 2 GB", message)
 
     def test_first_order_page_prices_do_not_alert(self):
         site = FakeSite(self.feed(), orderable={109})

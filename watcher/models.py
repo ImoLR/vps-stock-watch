@@ -47,6 +47,7 @@ class ChangeType(str, Enum):
     PRICE = "price"
     PROMOTION = "promotion"
     NAME = "name"
+    DETAILS = "details"
     REMOVED = "removed"
 
 

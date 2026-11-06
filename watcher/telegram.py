@@ -616,6 +616,7 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
         ChangeType.PRICE: "💰 %s 价格变化" % provider,
         ChangeType.PROMOTION: _promotion_heading(provider, product, old),
         ChangeType.NAME: "✏️ %s 商品名称变化" % provider,
+        ChangeType.DETAILS: "📝 %s 商品信息变化" % provider,
         ChangeType.REMOVED: "🗑 %s 商品下架" % provider,
     }
     if change.type == ChangeType.NEW and product.metadata.get("hidden_direct_link"):
@@ -627,6 +628,24 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
     lines = ["<b>%s</b>" % html.escape(headings[change.type]), ""]
     lines.append("名称：%s" % html.escape(product.name))
     lines.append("ID / PID：%s" % html.escape(product.product_id))
+    if change.type == ChangeType.DETAILS and old:
+        labels = {"category": "分类", "specs": "规格", "description": "描述"}
+        for field in change.fields:
+            if field == "specs":
+                for key in list(product.specs) + [k for k in old.specs if k not in product.specs]:
+                    if product.specs.get(key) != old.specs.get(key):
+                        lines.append(
+                            "%s：%s → %s"
+                            % (html.escape(key), _shown(old.specs.get(key)), _shown(product.specs.get(key)))
+                        )
+            elif field == "description":
+                lines.append("描述已改动：")
+                lines.append(html.escape((product.metadata.get("description") or "")[:500]))
+            else:
+                lines.append(
+                    "%s：%s → %s"
+                    % (labels.get(field, field), _shown(getattr(old, field, None)), _shown(getattr(product, field, None)))
+                )
     if change.type == ChangeType.NAME and old:
         lines.append("原名称：%s" % html.escape(old.name))
     _append(lines, "类型", product.category)

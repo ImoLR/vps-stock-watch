@@ -230,8 +230,9 @@ providers:
 
   # TCSCloud (Taipei home-broadband VPS): category cards carry "N 可用"; hidden
   # and direct-link PIDs come from the productsinfo feed and their order pages.
-  # ~1.6k requests/day: 4 categories every round, feed probes every 3rd
-  # round, order pages only for SeedNet PIDs (and once for a new PID).
+  # ~2k requests/day: 4 categories every round (SeedNet card stock + price
+  # every 5 min), feed probes every 2nd round, hourly SeedNet feed prices and
+  # retired-SeedNet order pages, new hidden PIDs' order page every round.
   - name: tcscloud
     type: tcscloud
     enabled: true
@@ -247,14 +248,17 @@ providers:
     # 2026-11-06 scan: pid 1-80 empty except 24 (TCP-BBR add-on), 120-170 empty.
     feed_start_pid: 80
     discovery_misses: 20
-    feed_every_rounds: 3
+    feed_every_rounds: 2
     probe_ahead: 2
     far_probe_span: 10
     name_batch: 1
     order_check_batch: 2
-    order_check_seconds: 1800
-    retired_check_seconds: 21600
-    price_refresh_seconds: 21600
+    # Watched PIDs without a card count (new hidden ones): every round.
+    order_check_seconds: 300
+    retired_check_seconds: 3600
+    # Per-cycle feed prices of watched products (SeedNet), one per round.
+    feed_price_seconds: 3600
+    feed_price_batch: 1
     # Not VPS: 24 TCP-BBR add-on, 89 TWNIC IP rental, 90 dedicated/colocation.
     ignore_pids: [24, 89, 90]
     # 2026-11-06 user: stock / restock / sold-out / price alerts and order-page
