@@ -290,6 +290,25 @@ class WatchTests(unittest.TestCase):
         renamed = Product("highend", "2", "Seednet.Matcha")
         self.assertTrue(instance.should_notify(Change(ChangeType.NAME, renamed, Product("highend", "2", "test"))))
 
+    def test_watched_only_limits_every_alert_and_the_sweep(self):
+        site = FakeSite(catalog())
+        instance = self.baseline(site, watch_keywords=["seednet"], watched_only=True)
+        site.products[21] = ("Hinet.Sencha", {"annually": "$400.00 USD"})
+        site.products[22] = ("Seednet.Hojicha", {"annually": "$200.00 USD"})
+        for _ in range(4):
+            instance.fetch_products()
+        swept = {int(c["pid"]) for c in site.calls if c["get"] == "name" and int(c["pid"]) <= 20}
+        priced = {int(c["pid"]) for c in site.calls if c["get"] == "price"}
+        self.assertEqual({2, 19, 20}, swept)
+        self.assertNotIn(21, priced)
+        self.assertIn(22, priced)
+        hinet, seednet = instance._catalog["21"], instance._catalog["22"]
+        for kind in (ChangeType.NEW, ChangeType.REMOVED):
+            self.assertFalse(instance.should_notify(Change(kind, hinet, hinet)))
+            self.assertTrue(instance.should_notify(Change(kind, seednet, seednet)))
+        listing = Change(ChangeType.NEW, hinet, hinet, ["listing"])
+        self.assertFalse(instance.should_notify(listing))
+
     def test_rename_reclassifies(self):
         site = FakeSite(catalog())
         instance = self.baseline(site)

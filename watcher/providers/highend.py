@@ -135,7 +135,10 @@ class HighendProvider(BaseProvider):
 
     New and removed PIDs, and products put on or taken off the watched store
     pages, alert for every product. Price, stock and name changes alert only
-    for names matching ``watch_keywords``.
+    for names matching ``watch_keywords``. With ``watched_only`` every alert,
+    the name sweep and new-PID pricing are limited to watched names (the
+    sweep still re-reads unclassified names such as ``test``, which a sale
+    item may be renamed from).
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -175,6 +178,12 @@ class HighendProvider(BaseProvider):
         name = product.name.casefold()
         return any(keyword in name for keyword in keywords)
 
+    def _tracked(self, product: Product) -> bool:
+        """Whether a product is re-read and priced by the feed at all."""
+        if not self.config.get("watched_only"):
+            return True
+        return self._watched(product) or product.region is None
+
     def additional_changes(
         self, products: List[Product], previous_state: Dict[str, Any]
     ) -> List[Change]:
@@ -196,9 +205,12 @@ class HighendProvider(BaseProvider):
         return changes
 
     def should_notify(self, change: Change) -> bool:
-        # New / removed PIDs and store-page moves alert for every product;
-        # price, stock and name changes only for watched ones.
-        if change.type in (ChangeType.NEW, ChangeType.REMOVED):
+        # New / removed PIDs and store-page moves alert for every product
+        # (unless watched_only); price, stock and name changes only for
+        # watched ones.
+        if change.type in (ChangeType.NEW, ChangeType.REMOVED) and not self.config.get(
+            "watched_only"
+        ):
             return super().should_notify(change)
         products = [change.product] + ([change.old] if change.old else [])
         if not any(self._watched(product) for product in products):
@@ -273,7 +285,7 @@ class HighendProvider(BaseProvider):
 
         # 1. Rotate through known PIDs, confirming suspected removals first.
         batch = max(0, int(self.config.get("sweep_batch", 5)))
-        known = sorted(catalog, key=int)
+        known = [pid for pid in sorted(catalog, key=int) if self._tracked(catalog[pid])]
         suspects = [pid for pid in known if pid in missing]
         rotation = [pid for pid in known if pid not in missing]
         picked = suspects[:batch]
@@ -312,7 +324,8 @@ class HighendProvider(BaseProvider):
             if name is None:
                 continue
             product = self._product(str(pid), name)
-            self._fill_prices(product)
+            if self._tracked(product):
+                self._fill_prices(product)
             catalog[str(pid)] = product
             found.append(str(pid))
             high_water = max(high_water, pid)
@@ -392,7 +405,8 @@ class HighendProvider(BaseProvider):
         for pid, info in listed.items():
             if pid not in self._catalog and info["name"]:
                 product = self._product(pid, info["name"])
-                self._fill_prices(product)
+                if self._tracked(product):
+                    self._fill_prices(product)
                 self._catalog[pid] = product
                 self._high_water = max(self._high_water, int(pid))
                 found.append(pid)

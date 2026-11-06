@@ -296,12 +296,14 @@ Provider（`type: highend`），2026-11-06 用户定的规则：
 - 每轮 120 秒：读 `store_pages`（台湾家宽 + 促销两个分类）和 `direct_links`（Matcha），3 个请求。
   分类页上出现 feed 还没见过的 PID 当轮就加进目录（查价格规格）并推送新品。
 - 每 `feed_every_rounds`（5）轮 = 10 分钟跑一次 feed：轮流复查 `sweep_batch`（2）个 PID 名称
-  （所有地区，用来发现下架）；探测历史最大 PID 之上 `probe_ahead`（2）个号；给一个关注商品刷新
+  （用来发现下架）；探测历史最大 PID 之上 `probe_ahead`（2）个号；给一个关注商品刷新
   四个付款周期价格（按上次查价时间轮换，偶数轮优先还没价格的；第一次还读 `description` 取规格）。
   共 8 个请求。合计约 3.3k 请求/天，间隔 5 秒。
-- **通知**：新 PID / PID 下架 / 商品上架到或撤出所监控的分类页（`fields == ["listing"]`）——
-  **不管什么产品都推**。价格、库存（有货/无货/数量）、改名——**只推 `watch_keywords`**
-  （名称含 hinet / seednet；So-Net.Peony 不算）。
+- **通知（2026-11-06 22:50 用户改为只看 Seednet）**：`watch_keywords: [seednet]` +
+  `watched_only: true`，新 PID、PID 下架、商品上架到或撤出所监控的分类页（`fields == ["listing"]`）、
+  价格、库存（有货/无货/数量）、改名——**全部只推名称含 Seednet 的**，其它产品一律不推。
+  feed 复查名称也只轮 Seednet 和认不出地区的名称（如 `test`，活动款可能从它改名而来），
+  非 Seednet 的新 PID 不查价格。（去掉 `watched_only` 就回到“新品/下架全推、价格库存只推关键词”。）
 - 首次运行从 pid 1 往上只查名称，连续 `discovery_misses`（40）个空号就停，作为基线不推送。
   上线后第一轮只是给目录补上库存，不推“上架”。
 - 一个 PID 连续两次查不到才算下架；任何请求失败、挑战页或回复格式不对就整轮作废，不改缓存。

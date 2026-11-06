@@ -207,9 +207,9 @@ providers:
   # hidden Matcha direct link = 3 requests. Every 5th round (10 min) the open
   # productsinfo feed also re-reads 2 names, probes 2 PIDs above the highest
   # (new hidden sale links) and refreshes 4 prices of one watched product
-  # = 8 requests. 5 s apart; ~3.3k/day. New / removed PIDs and store-page
-  # moves alert for every product; price / stock / name only for HiNet and
-  # Seednet (user, 2026-11-06).
+  # = 8 requests. 5 s apart; ~3.3k/day. Seednet only (user, 2026-11-06
+  # 22:50): every alert (new / removed / store-page moves / price / stock /
+  # name) is limited to Seednet names; nothing else notifies.
   - name: highend
     type: highend
     enabled: true
@@ -220,8 +220,8 @@ providers:
     request_spacing_seconds: 5
     retry_attempts: 2
     watch_keywords:
-      - hinet
       - seednet
+    watched_only: true
     store_pages:
       - /store/tpe-home-broadband
       - /store/promotion
