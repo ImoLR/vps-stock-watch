@@ -212,6 +212,63 @@ class IncrementalTests(unittest.TestCase):
             instance.fetch_products()
 
 
+class FocusRegionTests(unittest.TestCase):
+    def baseline(self, site):
+        instance = provider(site, focus_regions=["TW"], sweep_batch=10, discovery_misses=20)
+        instance.fetch_products()
+        site.calls.clear()
+        return instance
+
+    def test_only_focus_region_is_reread_and_priced(self):
+        site = FakeSite(catalog())
+        instance = self.baseline(site)
+        for _ in range(4):
+            instance.fetch_products()
+        swept = {int(c["pid"]) for c in site.calls if c["get"] == "name" and int(c["pid"]) <= 20}
+        priced = {int(c["pid"]) for c in site.calls if c["get"] == "price"}
+        self.assertEqual({2, 19, 20}, swept)
+        self.assertEqual({19, 20}, priced)
+
+    def test_new_pid_outside_focus_is_silent_and_unpriced(self):
+        site = FakeSite(catalog())
+        instance = self.baseline(site)
+        site.products[21] = ("HKG.P0.New", {"monthly": "$9.00 USD"})
+        site.products[22] = ("Hinet.Sencha", {"annually": "$400.00 USD"})
+        instance.fetch_products()
+        priced = {int(c["pid"]) for c in site.calls if c["get"] == "price"}
+        self.assertNotIn(21, priced)
+        self.assertIn(22, priced)
+        self.assertFalse(instance.should_notify(Change(ChangeType.NEW, instance._catalog["21"])))
+        self.assertTrue(instance.should_notify(Change(ChangeType.NEW, instance._catalog["22"])))
+
+    def test_unclassified_new_pid_still_notifies(self):
+        instance = provider(FakeSite({}), focus_regions=["TW"])
+        self.assertTrue(instance.should_notify(Change(ChangeType.NEW, Product("highend", "30", "test"))))
+
+    def test_rename_into_focus_reclassifies(self):
+        site = FakeSite(catalog())
+        instance = self.baseline(site)
+        site.products[2] = ("So-Net.Peony", {})
+        instance.fetch_products()
+        self.assertEqual("TW", instance._catalog["2"].region)
+        self.assertEqual("So-Net", instance._catalog["2"].category)
+
+    def test_unpriced_product_does_not_starve_the_rest(self):
+        site = FakeSite(catalog())
+        site.products[21] = ("So-Net.Peony", {})
+        instance = self.baseline(site)
+        picked = []
+        for _ in range(6):
+            site.calls.clear()
+            instance.fetch_products()
+            picked.append(next(int(c["pid"]) for c in site.calls if c["get"] == "price"))
+        # Rounds 0-1 price the never-priced 19/20; then 21 (still no price)
+        # gets every even round and the others the odd ones.
+        self.assertEqual([19, 20, 21], picked[:3])
+        self.assertEqual(21, picked[4])
+        self.assertNotIn(21, (picked[3], picked[5]))
+
+
 class StateTests(unittest.TestCase):
     def test_restore_state_skips_first_walk(self):
         site = FakeSite(catalog())

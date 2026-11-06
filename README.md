@@ -294,12 +294,17 @@ Provider（`type: highend`）因此只报 **新 PID / 改名 / 改价 / 下架**
 未知：
 
 - 首次运行从 pid 1 往上只查名称，连续 `discovery_misses`（40）个空号就停，作为基线不推送。
-- 之后每轮（600 秒）：轮流复查 `sweep_batch`（5）个已知 PID 的名称；探测历史最大 PID
-  之上的 `probe_ahead`（3）个号，外加在更远 `far_probe_span`（10）个号里轮换一个，防止删掉的
-  测试商品留下空洞；再给一个商品刷新 monthly/quarterly/semiannually/annually 四个价格
-  （没价格的优先；每个商品第一次还会读一次 `description`，从里面取 vCore/RAM/SSD/流量/带宽）。
-  新 PID 当轮就查价格和规格，推送里带价格、规格和下单直链。每轮 13 个请求（读规格那次 14 个）、
-  间隔 5 秒，约 1.9k 请求/天。
+- `focus_regions: [TW]`（2026-11-06 用户要求）：只复查、只推送台湾区（名称前缀
+  HiNet / Seednet / So-Net / TPE 等）。HK/SG 留在目录里保住 PID 高水位，但不再复查、新出现也
+  不推送不查价；名称认不出地区的（如 `test`）仍复查名称，新出现照样推送，以免漏掉改名的活动款。
+- 之后每轮（300 秒）：轮流复查 `sweep_batch`（1）个关注区 PID 的名称；探测历史最大 PID
+  之上的 `probe_ahead`（2）个号（`far_probe_span` 设 0 关掉远端探测）；再给一个台湾商品刷新
+  monthly/quarterly/semiannually/annually 四个价格（按上次查价时间轮换，偶数轮优先还没价格的，
+  比如还没开卖的 So-Net.Peony，一开价就推送“改价”；每个商品第一次还会读一次 `description`，
+  从里面取 vCore/RAM/SSD/流量/带宽）。新 PID 当轮就查价格和规格，推送里带价格、规格和下单直链。
+  每轮 7 个请求、间隔 5 秒，约 2k 请求/天。
+- 2026-11-06 生产机试过有头 Chromium 自动点 Turnstile 勾选框：点后拿到 `cf_clearance`，但页面
+  立刻又回到验证，循环过不去（机房 IP）。不要在机房 IP 上反复试。
 - 一个 PID 连续两次查不到才算下架；任何一个请求失败或回复不是 `document.write` 就整轮作废，
   不改缓存。403/429/挑战页不重试，由调度器退避（最长 3600 秒）。
 - 目录缓存在内存里，重启时通过 `restore_state` 从 state.json 恢复（含 `high_water_pid`），

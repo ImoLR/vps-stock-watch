@@ -20,7 +20,23 @@ NOT_FOUND = "Product ID Not Found"
 CYCLES = ("monthly", "quarterly", "semiannually", "annually")
 FEED_BODY = re.compile(r"^\s*document\.write\('(?P<value>.*)'\);?\s*$", re.S)
 # Name prefix -> region. Names look like HKG.P0.Micro, SIN.Standard.Mini, Seednet.Matcha.
-REGIONS = {"hkg": "HK", "sin": "SG", "hinet": "TW", "seednet": "TW", "so-net": "TW", "tpe": "TW"}
+REGIONS = {
+    "hkg": "HK",
+    "sin": "SG",
+    "hinet": "TW",
+    "seednet": "TW",
+    "so-net": "TW",
+    "sonet": "TW",
+    "tpe": "TW",
+    "twn": "TW",
+    "taiwan": "TW",
+}
+
+
+def region_of(name: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (category, region) from a name such as ``Seednet.Matcha``."""
+    prefix = name.split(".", 1)[0].strip()
+    return prefix or None, REGIONS.get(prefix.casefold())
 
 
 def parse_feed(body: str) -> str:
@@ -81,6 +97,11 @@ class HighendProvider(BaseProvider):
     all one request at a time ``request_spacing_seconds`` apart. The catalog
     survives restarts through ``restore_state``; only the very first run walks
     every PID.
+
+    With ``focus_regions`` set, only those regions (plus unclassified names
+    such as ``test``) are re-read, and only those regions get prices. Other
+    regions stay in the catalog so the PID high-water mark holds, but they
+    are never re-read and never notify.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -91,6 +112,7 @@ class HighendProvider(BaseProvider):
         self._high_water = 0
         self._sweep_cursor = 0
         self._far_cursor = 0
+        self._rounds = 0
         self._last_request: Optional[float] = None
         self._requests = 0
         self._clock: Callable[[], float] = time.monotonic
@@ -111,7 +133,18 @@ class HighendProvider(BaseProvider):
     ) -> None:
         provider_state["high_water_pid"] = self._high_water
 
+    def _in_focus(self, region: Optional[str], unknown: bool = True) -> bool:
+        focus = {str(item).upper() for item in self.config.get("focus_regions") or []}
+        if not focus:
+            return True
+        if region is None:
+            return unknown
+        return region.upper() in focus
+
     def should_notify(self, change: Change) -> bool:
+        products = [change.product] + ([change.old] if change.old else [])
+        if not any(self._in_focus(product.region) for product in products):
+            return False
         # Prices are filled in lazily after the baseline walk; the first fill
         # is not a price change.
         if (
@@ -173,7 +206,7 @@ class HighendProvider(BaseProvider):
 
         # 1. Rotate through known PIDs, confirming suspected removals first.
         batch = max(0, int(self.config.get("sweep_batch", 5)))
-        known = sorted(catalog, key=int)
+        known = [pid for pid in sorted(catalog, key=int) if self._in_focus(catalog[pid].region)]
         suspects = [pid for pid in known if pid in missing]
         rotation = [pid for pid in known if pid not in missing]
         picked = suspects[:batch]
@@ -194,7 +227,8 @@ class HighendProvider(BaseProvider):
                 continue
             missing.pop(pid, None)
             if name != catalog[pid].name:
-                catalog[pid] = self._copy(catalog[pid], name=name)
+                category, region = region_of(name)
+                catalog[pid] = self._copy(catalog[pid], name=name, category=category, region=region)
 
         # 2. Probe above the highest PID ever seen, plus one rotating far PID
         #    in case deleted test products left a gap.
@@ -211,20 +245,28 @@ class HighendProvider(BaseProvider):
             if name is None:
                 continue
             product = self._product(str(pid), name)
-            self._fill_prices(product)
+            if self._in_focus(product.region):
+                self._fill_prices(product)
             catalog[str(pid)] = product
             found.append(str(pid))
             high_water = max(high_water, pid)
 
-        # 3. Refresh one product's prices: never-priced first, then oldest.
+        # 3. Refresh one product's prices, oldest first. Every other round
+        #    goes to a not-yet-priced product first (a sale item about to
+        #    open), so one of those cannot starve the rest.
+        unpriced_first = self._rounds % 2 == 0
         for _ in range(max(0, int(self.config.get("price_batch", 1)))):
-            candidates = [pid for pid in sorted(catalog, key=int) if pid not in found]
+            candidates = [
+                pid
+                for pid in sorted(catalog, key=int)
+                if pid not in found and self._in_focus(catalog[pid].region, unknown=False)
+            ]
             if not candidates:
                 break
             pid = min(
                 candidates,
                 key=lambda value: (
-                    bool(catalog[value].pricing),
+                    unpriced_first and bool(catalog[value].pricing),
                     catalog[value].metadata.get("priced_at", 0),
                     int(value),
                 ),
@@ -239,18 +281,19 @@ class HighendProvider(BaseProvider):
         self._high_water = high_water
         self._sweep_cursor = cursor
         self._far_cursor += 1
+        self._rounds += 1
         return found
 
     # -- products ----------------------------------------------------------------
 
     def _product(self, pid: str, name: str) -> Product:
-        prefix = name.split(".", 1)[0].strip()
+        category, region = region_of(name)
         return Product(
             provider=self.name,
             product_id=pid,
             name=name,
-            category=prefix or None,
-            region=REGIONS.get(prefix.casefold()),
+            category=category,
+            region=region,
             url=self.base_url + ORDER_URL % pid,
             metadata={"stock_source": "none (store pages behind Cloudflare challenge)"},
         )

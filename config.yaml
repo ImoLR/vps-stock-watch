@@ -205,20 +205,24 @@ providers:
   # IPs, so stock is unreadable. The public WHMCS feed (productsinfo.php) is
   # open and lists every PID, including direct-link sale items such as
   # /store/promotion/tpe-seednet-matcha (pid 20), so a new PID alerts before
-  # the link is posted. Per 10-min round: 5 known names + 4 probes above the
-  # highest PID + 4 prices for one product = 13 requests, 5 s apart (~1.9k/day).
+  # the link is posted. Only Taiwan (HiNet / Seednet / So-net) is re-read and
+  # notified; HK/SG stay silent. Per 5-min round: 1 known name + 2 probes
+  # above the highest PID + 4 prices for one TW product = 7 requests, 5 s
+  # apart (~2k/day).
   - name: highend
     type: highend
     enabled: true
     base_url: https://billing.highendnetwork.com/
     currency_id: 1
-    interval_seconds: 600
+    interval_seconds: 300
     timeout_seconds: 20
     request_spacing_seconds: 5
     retry_attempts: 2
-    sweep_batch: 5
-    probe_ahead: 3
-    far_probe_span: 10
+    focus_regions:
+      - TW
+    sweep_batch: 1
+    probe_ahead: 2
+    far_probe_span: 0
     price_batch: 1
     discovery_misses: 40
     minimum_products: 10
