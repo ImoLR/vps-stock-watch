@@ -95,6 +95,15 @@ inventory）自 2026-10-22 起只在新品（NEW）和下架（REMOVED）时通�
 
 ### BOILCLOUD
 
+**2026-11-07 起停用**：用户要求先关闭 BOILCLOUD 监控，准备重新设计，`config.yaml` 里
+`enabled: false`。Provider 代码、测试和下面的说明都保留；要恢复时改回 `enabled: true` 并重启。
+停用前查到的情况：`cart.php?gid=N` 对隐藏分组也会 302 到 `/store/<slug>`，gid 1–77 存在、
+78 起跳回 `/store`；节日分组是 gid 44 `store/festive-offer`（“節日特別提供”，当时为空），
+不在导航和 sitemap 里，旧 Provider 读不到。其他隐藏分组有 free、china-idc、windows、
+customized-productst、residential-proxy、hong-kong-dedicated-diy、taiwan-c 和
+hong-kong-zone1–49。`feeds/productsinfo.php?pid=N&get=name` 公开可用（隐藏商品也返回名称，
+不存在返回 `Product ID Not Found`），当时最大 PID 为 528。
+
 BOILCLOUD 当前使用 WHMCS 服务端商城 HTML，不使用 Playwright。普通 HTTP 请求就能在
 `div.tt-single-product[id^="product"]` 商品卡片中取得真实 PID、名称、价格、付款周期、
 整数库存、规格和商品链接。浏览器 Network 验证只看到语言包 JSON 和统计请求，没有

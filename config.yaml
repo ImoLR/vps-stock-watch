@@ -102,9 +102,11 @@ providers:
     timeout_seconds: 25
     max_backoff_seconds: 1800
 
+  # Disabled 2026-11-07 at the user's request; the monitor will be redesigned
+  # (hidden holiday group gid 44 store/festive-offer). Code kept.
   - name: boilcloud
     type: boilcloud
-    enabled: true
+    enabled: false
     base_url: https://cloud.boil.network/
     store_url: https://cloud.boil.network/index.php?rp=/store
     sitemap_url: https://cloud.boil.network/sitemap.xml
