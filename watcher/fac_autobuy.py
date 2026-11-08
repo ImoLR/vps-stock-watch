@@ -83,10 +83,12 @@ DEFAULTS: Dict[str, Any] = {
     "max_order_failures": 3,
     # Never order a link that is still hidden (user, 2026-11-08). A link is
     # public once it was posted on Telegram, or once its category shows up
-    # in the shop's own menu. Order public_delay_seconds after that (user:
-    # 3-5 s; longer risks losing the item), so the order looks like a person
-    # reacting. The browser warms up during that wait. While a sale page is
-    # open but not listed yet, re-check the menu every hidden_poll_seconds.
+    # in the shop's own menu. Order once it has been public for at least
+    # public_delay_seconds (user: 3-5 s; longer risks losing the item). A TG
+    # post means it is public already: order at once. A menu check that finds
+    # it listed orders at once too, unless the previous check (still hidden)
+    # was under public_delay_seconds ago; then wait out the rest. While a sale
+    # page is open but not listed yet, re-check the menu every hidden_poll_seconds.
     "public_delay_seconds": 4,
     "hidden_poll_seconds": 120,
 }
@@ -175,6 +177,18 @@ def listed_category(url: str, menu_links: Iterable[str], base_url: str) -> bool:
         if link_kind == "category" and link_target:
             listed.add(tuple(urlparse(link_target).path.strip("/").split("/")[:2]))
     return tuple(category) in listed
+
+
+def public_wait(min_age: float, last_hidden_at: Optional[float], now: float) -> float:
+    """Seconds to wait so a link is public for ``min_age`` s before ordering.
+
+    It turned public at some point after ``last_hidden_at`` (the last check
+    that still saw it hidden); with no such check it may have been public for
+    any time, so no wait.
+    """
+    if last_hidden_at is None:
+        return 0.0
+    return max(0.0, min_age - (now - last_hidden_at))
 
 
 def trigger_is_public(trigger: Dict[str, Any]) -> bool:
@@ -712,14 +726,14 @@ class FacAutoBuyer:
     def arm(self, urls: Iterable[str], source: str, public: bool) -> None:
         now = time.monotonic()
         until = now + float(self.cfg["arm_minutes"]) * 60
-        delay = float(self.cfg["public_delay_seconds"])
         new = []
         for url in urls:
             entry = self.armed.get(url)
             if entry is None:
+                # A TG post is public already: order right away.
                 self.armed[url] = {
-                    "since": now, "until": until, "public": public,
-                    "next": now + delay if public else now,
+                    "since": now, "until": until, "public": public, "next": now,
+                    "hidden_seen": None,
                 }
                 self.failures.pop(url, None)
                 new.append(url)
@@ -730,21 +744,28 @@ class FacAutoBuyer:
         if new:
             LOG.info("armed by %s (%s): %s", source, "public" if public else "not public yet", new)
 
-    def make_public(self, url: str, why: str) -> None:
+    def make_public(self, url: str, why: str) -> float:
+        """Mark ``url`` public; returns the wait before ordering it."""
         entry = self.armed[url]
         entry["public"] = True
-        entry["next"] = time.monotonic() + float(self.cfg["public_delay_seconds"])
-        LOG.info("%s is public now (%s)", url, why)
+        now = time.monotonic()
+        wait = 0.0
+        if why != "TG 已发布":
+            wait = public_wait(float(self.cfg["public_delay_seconds"]), entry.get("hidden_seen"), now)
+        entry["next"] = now + wait
+        LOG.info("%s is public now (%s); ordering in %.1f s", url, why, wait)
+        return wait
 
     def check_public(self, url: str) -> bool:
         """For a link only the site monitor saw: is it in the shop menu yet?"""
         self.goto(self.base_url)
         links = self.page.eval_on_selector_all('a[href*="/products/"]', "els => els.map(e => e.href)")
         if listed_category(url, links, self.base_url):
-            self.make_public(url, "已出现在商城菜单")
-            self.notify("👀 <b>FAC 活动页已出现在商城菜单</b>，%g 秒后开始下单\n%s"
-                        % (float(self.cfg["public_delay_seconds"]), html.escape(url)))
+            wait = self.make_public(url, "已出现在商城菜单")
+            self.notify("👀 <b>FAC 活动页已出现在商城菜单</b>，%s\n%s"
+                        % ("马上下单" if wait < 0.5 else "%.0f 秒后下单" % wait, html.escape(url)))
             return True
+        self.armed[url]["hidden_seen"] = time.monotonic()
         return False
 
     def interval_for(self, entry: Dict[str, float]) -> float:

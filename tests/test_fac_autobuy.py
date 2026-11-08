@@ -13,6 +13,7 @@ from watcher.fac_autobuy import (
     money_amounts,
     name_matches,
     parse_money,
+    public_wait,
     trigger_is_public,
     trigger_targets,
 )
@@ -117,6 +118,14 @@ class PublicTest(unittest.TestCase):
         self.assertTrue(listed_category(
             "https://fachost.cloud/products/tw-seednet-vds/seednet-vds-1/checkout", self.MENU, BASE))
         self.assertFalse(listed_category("https://fachost.cloud/announcements", self.MENU, BASE))
+
+    def test_public_wait_counts_from_the_last_hidden_check(self):
+        # Never seen hidden (TG, or listed at the first look): order at once.
+        self.assertEqual(public_wait(4, None, 100.0), 0.0)
+        # Last check that still saw it hidden was 2 minutes ago: order at once.
+        self.assertEqual(public_wait(4, 0.0, 120.0), 0.0)
+        # It was still hidden 1 s ago: wait the remaining 3 s.
+        self.assertAlmostEqual(public_wait(4, 99.0, 100.0), 3.0)
 
     def test_only_telegram_triggers_are_public(self):
         self.assertTrue(trigger_is_public({"source": "tg-channel"}))
