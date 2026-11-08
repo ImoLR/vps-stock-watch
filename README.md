@@ -745,6 +745,57 @@ systemd-run --unit nexkr-autobuy --working-directory "$PWD" \
   真正买到。抢到后要去面板确认服务没有被终止。
 - CM 入口从海外 SSH 连不上，开通后要在国内测试登录。
 
+**FAC（FACHOST）抢购程序（2026-11-08 起）**
+
+`watcher.fac_autobuy`（`deploy/fac-autobuy.service`）自己不轮询网站，靠上面两路 FAC 监控唤醒：
+
+- `fac_tg_watch` 转发的消息里有 FAC 链接，或频道/群管理员的消息带活动关键词，就往
+  `data/autobuy/fac_triggers/` 写一个触发文件；`fachost_sale` 发现 `special-regulations`
+  能打开时也写一个。
+- 抢购程序取走触发文件，把里面的链接“武装” 6 小时：前 30 分钟每 20 秒查一次，之后每 60 秒
+  （TG `/autobuy` 里改的间隔优先）。公告页、首页这类不是商品的链接，或只有关键词没链接的帖子，
+  武装 `special-regulations`。没有武装的链接时不开浏览器，只每 6 小时检查一次登录。
+- 只买一台：名称含 `seednet`、不含单独的 `nat` 一词、有年付周期、今日总价 ≤ `max_total`
+  （现为 $280）。超价只通知一次，不下单。下单后写 `data/fac_autobuy_done.json` 并自动暂停，
+  在 TG `/autobuy` 里恢复才会再买。
+- 付款：购物车默认勾着“用余额付款”，程序不去动它。余额够就当场付清；不够就留下未付款账单，
+  TG 发账单链接让你手动付。
+
+账号在 `data/fac_account.env`（`FAC_EMAIL`/`FAC_PASSWORD`），登录状态在 Chromium 资料目录
+`data/fac_profile/`，都是 0600/0700，不进 git。`paymenter_remember` cookie 有效 30 天，过期后
+程序会自己重新登录。手动命令（要套 `xvfb-run`）：
+
+```bash
+xvfb-run -a .venv/bin/python -m watcher.fac_autobuy --check-login
+# 测试下单：只在余额低于总价时才点结账（保证不扣款），然后自动取消新服务。
+# 只用公开在售的正价商品测试，不要用隐藏链接。
+xvfb-run -a .venv/bin/python -m watcher.fac_autobuy --test-url <商品链接> --cancel-after
+```
+
+服务：`cp deploy/fac-autobuy.service /etc/systemd/system/ && systemctl daemon-reload &&
+systemctl enable --now fac-autobuy`。改了触发钩子后，`fac-tg-watch` 和 `vps-stock-watch`
+都要重启才会写触发文件。
+
+**FAC 的坑（2026-11-08）**
+
+- 登录页和购物车都有 Cloudflare Turnstile。用 Playwright 启动的 Chromium（再加上伪装成
+  Windows 的 UA）会被当场判失败，真人在 VNC 里点也没用。直接启动一个普通 Chromium（真实 UA、
+  不带自动化参数），只通过 `127.0.0.1` 的 CDP 端口连上去控制，Turnstile 自己就显示 Success。
+  不要监听浏览器 console：Cloudflare 的脚本会探测它。
+- 关浏览器要走 CDP `Browser.close`。`systemctl kill` 会把整个进程组一起杀掉，刚登录的
+  cookie 还没落盘就丢了。
+- 购物车 Turnstile 的回调用延迟的 `set('captcha', token, false)` 存 token，而页面在每个
+  Livewire 请求成功后都会 `turnstile.reset()`。所以结账前任何一次往返（删除商品、优惠码）
+  之后，都要等新 token 再点 Checkout。
+- 别改 `use_credits`：实时 `set` 会触发一次往返、重置验证码，之后点 Checkout 不发请求；
+  改成延迟 `set(..., false)` 能发出去，但服务器一直不回、也不建订单。
+- Livewire 的更新地址是 `/paymenter/update`，不是 `/livewire/update`。
+- 结账请求出现过 40 秒以上都不回的情况。程序最多等 90 秒，超时就去 `/invoices` 看有没有新
+  账单；下一轮下单前也会先查一次，防止重复下单。
+- 金额格式是 `$1.020,00`（点是千分位，逗号是小数点）。
+- 商品页必填 hostname；一个时长的选项文本形如 `年付 - $990,00 + $30,00 Setup fee`。
+- 测试单只能用公开在售的正价商品；隐藏商品外面搜不到，在上面下测试单太显眼（用户要求）。
+
 ## YAML 规则 Provider
 
 `config.yaml` 内含 CSS 示例。规则引擎支持：

@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup, Tag
 
+from ..fac_trigger import post_trigger
 from ..models import Product
 from .base import FetchError, ParseError, is_challenge_page
 from .fachost import FachostProvider
@@ -74,6 +75,14 @@ class FachostSaleProvider(FachostProvider):
                         self._plans[card.product_id] = plans
                 card.pricing = dict(self._plans.get(card.product_id, {}))
                 products.append(card)
+        open_urls = [
+            item.url
+            for item in products
+            if item.metadata.get("catalog_event") == "sale_category" and item.available
+        ]
+        if open_urls:
+            # Wake the FAC auto-buyer (it re-checks the page itself).
+            post_trigger(self.config.get("autobuy_trigger_dir"), "fachost_sale", open_urls)
         self.last_scan_stats = {
             "categories": len(slugs),
             "open_categories": sum(

@@ -1,0 +1,22 @@
+[Unit]
+Description=FACHOST auto-buyer (woken by fac-tg-watch and the fachost_sale provider)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/projects/vps-stock-watch/vps-stock-watch
+EnvironmentFile=/root/projects/vps-stock-watch/vps-stock-watch/.env
+# Turnstile needs a headed, plain Chromium, so give it a virtual display.
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x900x24" /root/projects/vps-stock-watch/vps-stock-watch/.venv/bin/python -m watcher.fac_autobuy --config /root/projects/vps-stock-watch/vps-stock-watch/config.yaml
+Restart=on-failure
+RestartSec=1min
+# Chromium runs only while a trigger is armed or during the login check.
+MemoryMax=1200M
+KillMode=mixed
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target

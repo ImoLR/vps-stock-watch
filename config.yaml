@@ -52,6 +52,29 @@ fac_tg_watch:
   group_id: -1002306171240
   catch_up_seconds: 600
   admin_refresh_seconds: 3600
+  # Relayed posts with a FAC link or sale keyword also wake the auto-buyer.
+  autobuy_trigger_dir: data/autobuy/fac_triggers
+
+# FACHOST auto-buyer (watcher.fac_autobuy, deploy/fac-autobuy.service; user,
+# 2026-11-08). It never polls on its own: the TG relay above and the
+# fachost_sale provider drop triggers, and each trigger arms its links for
+# arm_minutes (polled every fast_poll_seconds for fast_minutes, then every
+# slow_poll_seconds). Buys ONE SeedNet (not NAT) annual plan with a total
+# today <= max_total, paid from the account balance, then pauses itself.
+# Login lives in the Chromium profile (data/fac_profile, not in git).
+fac_autobuy:
+  enabled: true
+  name_include: [seednet]
+  name_exclude: [nat]
+  max_total: 280
+  coupons: []
+  default_urls:
+    - https://fachost.cloud/products/special-regulations
+  arm_minutes: 360
+  fast_poll_seconds: 20
+  fast_minutes: 30
+  slow_poll_seconds: 60
+  login_check_hours: 6
 
 suspicious_keywords:
   - test
@@ -158,6 +181,7 @@ providers:
     base_url: https://fachost.cloud/
     categories: [special-regulations]
     interval_seconds: 300
+    autobuy_trigger_dir: data/autobuy/fac_triggers
     timeout_seconds: 25
     request_spacing_seconds: 5
     max_backoff_seconds: 3600

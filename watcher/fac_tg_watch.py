@@ -13,6 +13,9 @@ What is relayed:
 - channel: every new post, plus edits that change the text;
 - group: messages with a fachost.cloud link (anyone), and messages from
   group admins (people, or bots named fac_*) that hit a sale keyword.
+
+Relayed messages with a FAC link or a sale keyword are also queued for the
+FAC auto-buyer (``autobuy_trigger_dir``; see watcher.fac_autobuy).
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 from .config import load_config, telegram_credentials
+from .fac_trigger import post_trigger
 from .telegram import TelegramClient as BotClient
 from .telegram import TelegramError
 
@@ -198,6 +202,8 @@ class FacTelegramWatch:
         self.catch_up_seconds = max(60, int(self.cfg.get("catch_up_seconds", 600)))
         self.admin_refresh_seconds = max(300, int(self.cfg.get("admin_refresh_seconds", 3600)))
         self.state = RelayState(session_dir / "relay_state.json")
+        trigger_dir = self.cfg.get("autobuy_trigger_dir")
+        self.trigger_dir = str(base / str(trigger_dir)) if trigger_dir else None
         self.admins: Set[int] = set()
         self._admins_at = 0.0
         self._lock = asyncio.Lock()
@@ -210,6 +216,14 @@ class FacTelegramWatch:
             await asyncio.to_thread(self.bot.send, message)
         except TelegramError:
             LOG.exception("relay notification failed")
+
+    def trigger(self, source: str, text: str, urls: List[str], trusted: bool) -> None:
+        """Queue a sighting for the auto-buyer: FAC links, or a sale keyword
+        from the channel / a group admin."""
+        links = fac_links(urls)
+        keyword = trusted and matches_keyword(text, self.keywords)
+        if links or keyword:
+            post_trigger(self.trigger_dir, source, links, text, keyword_hit=keyword)
 
     def _channel_link(self, message_id: int) -> str:
         if self.channel_username:
@@ -252,6 +266,7 @@ class FacTelegramWatch:
                     self.state.save()
                     return
             urls = message_urls(message.raw_text, message.entities, message.buttons)
+            self.trigger("tg-channel", message.raw_text, urls, True)
             await self.notify(
                 format_relay(
                     "channel",
@@ -279,6 +294,7 @@ class FacTelegramWatch:
         reason = group_relay_reason(message.raw_text, urls, sender_id in self.admins, self.keywords)
         if not reason:
             return
+        self.trigger("tg-group", message.raw_text, urls, sender_id in self.admins)
         sender = await message.get_sender()
         link = "https://t.me/c/%s/%s" % (str(self.group_id)[4:], message.id)
         await self.notify(
