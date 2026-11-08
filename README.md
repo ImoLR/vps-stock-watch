@@ -755,6 +755,9 @@ systemd-run --unit nexkr-autobuy --working-directory "$PWD" \
 - 抢购程序取走触发文件，把里面的链接“武装” 6 小时：前 30 分钟每 20 秒查一次，之后每 60 秒
   （TG `/autobuy` 里改的间隔优先）。公告页、首页这类不是商品的链接，或只有关键词没链接的帖子，
   武装 `special-regulations`。没有武装的链接时不开浏览器，只每 6 小时检查一次登录。
+- **不买还没公开的隐藏链接**（用户要求）：链接在 TG（频道或群）发出来就算公开；只被网站监控
+  看到的页面（比如 `special-regulations` 从 404 变成能打开），要等它出现在商城菜单里才算公开，
+  在那之前只每 2 分钟看一次首页菜单，不会登录去打开它（通知照发）。确认公开后等 5 秒再下单。
 - 只买一台：名称含 `seednet`、不含单独的 `nat` 一词、有年付周期、今日总价 ≤ `max_total`
   （现为 $280）。超价只通知一次，不下单。下单后写 `data/fac_autobuy_done.json` 并自动暂停，
   在 TG `/autobuy` 里恢复才会再买。
@@ -795,6 +798,9 @@ systemctl enable --now fac-autobuy`。改了触发钩子后，`fac-tg-watch` 和
 - 金额格式是 `$1.020,00`（点是千分位，逗号是小数点）。
 - 商品页必填 hostname；一个时长的选项文本形如 `年付 - $990,00 + $30,00 Setup fee`。
 - 测试单只能用公开在售的正价商品；隐藏商品外面搜不到，在上面下测试单太显眼（用户要求）。
+- 登录：`paymenter_session` 2 小时，`paymenter_remember` 30 天，访问时会用 remember 自动续上
+  session，所以不需要每隔几分钟“活动”一下。在别的设备登录不会把程序挤掉（Laravel 默认行为，未实测）；但点“退出登录”会让
+  所有设备的 remember 失效（Laravel 会换 remember token），程序下次检查或下单时会自己重新登录。
 
 ## YAML 规则 Provider
 

@@ -9,9 +9,11 @@ from unittest.mock import patch
 from watcher.fac_autobuy import (
     choose_plan,
     classify_url,
+    listed_category,
     money_amounts,
     name_matches,
     parse_money,
+    trigger_is_public,
     trigger_targets,
 )
 from watcher.fac_trigger import post_trigger, take_triggers
@@ -97,6 +99,30 @@ class UrlTest(unittest.TestCase):
         self.assertEqual(trigger_targets({"urls": [], "keyword_hit": True}, BASE, DEFAULTS), DEFAULTS)
         both = trigger_targets({"urls": [product], "keyword_hit": True}, BASE, DEFAULTS)
         self.assertEqual(both, [product + "/checkout"] + DEFAULTS)
+
+
+class PublicTest(unittest.TestCase):
+    MENU = [
+        "https://fachost.cloud/products/tw-tbc-vds",
+        "https://fachost.cloud/products/tw-seednet-vds",
+        "https://fachost.cloud/products/tw-seednet-vds/seednet-vds-1",
+    ]
+
+    def test_listed_only_when_the_category_is_in_the_menu(self):
+        sale = "https://fachost.cloud/products/special-regulations"
+        self.assertFalse(listed_category(sale, self.MENU, BASE))
+        self.assertFalse(listed_category(sale + "/seednet-bf-2026/checkout", self.MENU, BASE))
+        self.assertTrue(listed_category(sale, self.MENU + [sale], BASE))
+        self.assertTrue(listed_category(sale + "/seednet-bf-2026/checkout", self.MENU + [sale + "?x=1"], BASE))
+        self.assertTrue(listed_category(
+            "https://fachost.cloud/products/tw-seednet-vds/seednet-vds-1/checkout", self.MENU, BASE))
+        self.assertFalse(listed_category("https://fachost.cloud/announcements", self.MENU, BASE))
+
+    def test_only_telegram_triggers_are_public(self):
+        self.assertTrue(trigger_is_public({"source": "tg-channel"}))
+        self.assertTrue(trigger_is_public({"source": "tg-group"}))
+        self.assertFalse(trigger_is_public({"source": "fachost_sale"}))
+        self.assertFalse(trigger_is_public({}))
 
 
 class TriggerQueueTest(unittest.TestCase):

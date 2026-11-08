@@ -8,6 +8,11 @@ armed links are checked one page at a time until a matching product can be
 ordered. Matching = the product name contains an include word (SeedNet),
 no exclude word (NAT), an annual plan, and a total at or under the cap.
 
+Hidden links are never ordered (user, 2026-11-08): a link counts as public
+once it was posted on Telegram, or once its category is linked from the
+shop menu. Until then the buyer only re-checks the menu (it never opens the
+hidden page while logged in); after that it waits a few seconds, then orders.
+
 The site sits behind Cloudflare Turnstile on login and at checkout.
 Turnstile fails at once in a Playwright-launched Chromium, but passes by
 itself in a plain Chromium started directly (real user agent, no automation
@@ -76,6 +81,13 @@ DEFAULTS: Dict[str, Any] = {
     "page_spacing_seconds": 4,
     "login_check_hours": 6,
     "max_order_failures": 3,
+    # Never order a link that is still hidden (user, 2026-11-08). A link is
+    # public once it was posted on Telegram, or once its category shows up
+    # in the shop's own menu. Order public_delay_seconds after that, so the
+    # order looks like a person reacting. While a sale page is open but not
+    # listed yet, re-check the menu every hidden_poll_seconds.
+    "public_delay_seconds": 5,
+    "hidden_poll_seconds": 120,
 }
 INVOICE_PATH = re.compile(r"/invoices/([^/?#]+)")
 
@@ -148,6 +160,25 @@ def classify_url(url: str, base_url: str) -> Tuple[str, Optional[str]]:
         if len(parts) >= 3:
             return "checkout", urljoin(root, "products/%s/%s/checkout" % (parts[1], parts[2]))
     return "other", None
+
+
+def listed_category(url: str, menu_links: Iterable[str], base_url: str) -> bool:
+    """True when ``url``'s category is linked from the shop menu."""
+    kind, target = classify_url(url, base_url)
+    if not target:
+        return False
+    category = urlparse(target).path.strip("/").split("/")[:2]
+    listed = set()
+    for link in menu_links:
+        link_kind, link_target = classify_url(link, base_url)
+        if link_kind == "category" and link_target:
+            listed.add(tuple(urlparse(link_target).path.strip("/").split("/")[:2]))
+    return tuple(category) in listed
+
+
+def trigger_is_public(trigger: Dict[str, Any]) -> bool:
+    """Telegram posts are public; the site monitor only sees a page open."""
+    return str(trigger.get("source") or "").startswith("tg-")
 
 
 def trigger_targets(trigger: Dict[str, Any], base_url: str, default_urls: Sequence[str]) -> List[str]:
@@ -677,20 +708,43 @@ class FacAutoBuyer:
         return OrderResult.DROP if give_up else OrderResult.WAIT
 
     # -- arming and the main loop ------------------------------------------
-    def arm(self, urls: Iterable[str], source: str) -> None:
+    def arm(self, urls: Iterable[str], source: str, public: bool) -> None:
         now = time.monotonic()
         until = now + float(self.cfg["arm_minutes"]) * 60
+        delay = float(self.cfg["public_delay_seconds"])
         new = []
         for url in urls:
             entry = self.armed.get(url)
             if entry is None:
-                self.armed[url] = {"since": now, "until": until, "next": now}
+                self.armed[url] = {
+                    "since": now, "until": until, "public": public,
+                    "next": now + delay if public else now,
+                }
                 self.failures.pop(url, None)
                 new.append(url)
             else:
                 entry["until"] = max(entry["until"], until)
+                if public and not entry["public"]:
+                    self.make_public(url, "TG 已发布")
         if new:
-            LOG.info("armed by %s: %s", source, new)
+            LOG.info("armed by %s (%s): %s", source, "public" if public else "not public yet", new)
+
+    def make_public(self, url: str, why: str) -> None:
+        entry = self.armed[url]
+        entry["public"] = True
+        entry["next"] = time.monotonic() + float(self.cfg["public_delay_seconds"])
+        LOG.info("%s is public now (%s)", url, why)
+
+    def check_public(self, url: str) -> bool:
+        """For a link only the site monitor saw: is it in the shop menu yet?"""
+        self.goto(self.base_url)
+        links = self.page.eval_on_selector_all('a[href*="/products/"]', "els => els.map(e => e.href)")
+        if listed_category(url, links, self.base_url):
+            self.make_public(url, "已出现在商城菜单")
+            self.notify("👀 <b>FAC 活动页已出现在商城菜单</b>，%g 秒后开始下单\n%s"
+                        % (float(self.cfg["public_delay_seconds"]), html.escape(url)))
+            return True
+        return False
 
     def interval_for(self, entry: Dict[str, float]) -> float:
         fast = self.switch.interval(float(self.cfg["fast_poll_seconds"]))
@@ -730,8 +784,16 @@ class FacAutoBuyer:
         for url in due:
             if self.stopping or self.switch.control.paused():
                 return False
-            self.beat(state="watching", detail="检查 %s" % url)
+            entry = self.armed[url]
             try:
+                if not entry["public"]:
+                    # Hidden so far: never open it while logged in; only
+                    # watch the public menu (the monitors already notified).
+                    self.beat(state="watching", detail="等 %s 公开（商城菜单或 TG）" % url)
+                    if not self.check_public(url):
+                        entry["next"] = time.monotonic() + float(self.cfg["hidden_poll_seconds"])
+                    continue
+                self.beat(state="watching", detail="检查 %s" % url)
                 result = self.attempt(url)
             except BlockedError as exc:
                 self.notify(
@@ -759,7 +821,9 @@ class FacAutoBuyer:
 
     def idle_detail(self) -> str:
         if self.armed:
-            return "已触发，正在盯 %d 个链接：%s" % (len(self.armed), "、".join(self.armed))
+            return "已触发，正在盯 %d 个链接：%s" % (len(self.armed), "、".join(
+                url if entry["public"] else "%s（未公开，只看菜单）" % url
+                for url, entry in self.armed.items()))
         return "待命：等 FAC TG 公告/群消息或活动分类页开放"
 
     def run(self) -> int:
@@ -779,7 +843,7 @@ class FacAutoBuyer:
                     LOG.info("resumed after a purchase; old marker archived")
                 for trigger in take_triggers(self.trigger_dir):
                     targets = trigger_targets(trigger, self.base_url, self.cfg["default_urls"])
-                    self.arm(targets, str(trigger.get("source")))
+                    self.arm(targets, str(trigger.get("source")), trigger_is_public(trigger))
                 if self.armed:
                     if self.poll_armed():
                         self.chrome.stop()
