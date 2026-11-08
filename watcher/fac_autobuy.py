@@ -83,10 +83,11 @@ DEFAULTS: Dict[str, Any] = {
     "max_order_failures": 3,
     # Never order a link that is still hidden (user, 2026-11-08). A link is
     # public once it was posted on Telegram, or once its category shows up
-    # in the shop's own menu. Order public_delay_seconds after that, so the
-    # order looks like a person reacting. While a sale page is open but not
-    # listed yet, re-check the menu every hidden_poll_seconds.
-    "public_delay_seconds": 5,
+    # in the shop's own menu. Order public_delay_seconds after that (user:
+    # 3-5 s; longer risks losing the item), so the order looks like a person
+    # reacting. The browser warms up during that wait. While a sale page is
+    # open but not listed yet, re-check the menu every hidden_poll_seconds.
+    "public_delay_seconds": 4,
     "hidden_poll_seconds": 120,
 }
 INVOICE_PATH = re.compile(r"/invoices/([^/?#]+)")
@@ -775,12 +776,15 @@ class FacAutoBuyer:
             if self.armed[url]["until"] < now:
                 LOG.info("disarming %s (window over)", url)
                 self.armed.pop(url, None)
-        due = [url for url, entry in self.armed.items() if entry["next"] <= now]
-        if not due:
+        if not self.armed:
             return False
         if not self.chrome.running:
+            # Warm up as soon as something is armed, i.e. during the
+            # public_delay wait, so the order follows the delay directly.
             self.chrome.start()
             self.known_invoice = self.newest_invoice()
+        now = time.monotonic()
+        due = [url for url, entry in self.armed.items() if entry["next"] <= now]
         for url in due:
             if self.stopping or self.switch.control.paused():
                 return False
