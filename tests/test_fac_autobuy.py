@@ -7,8 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from watcher.fac_autobuy import (
+    CREDIT_OPTION,
     choose_plan,
     classify_url,
+    invoice_state,
     listed_category,
     money_amounts,
     name_matches,
@@ -43,6 +45,25 @@ class MoneyTest(unittest.TestCase):
     def test_plan_label_amounts(self):
         label = "年付 - $990,00\n      + $30,00 Setup fee"
         self.assertEqual(money_amounts(label), [990.0, 30.0])
+
+
+class InvoiceTest(unittest.TestCase):
+    # Text of the real unpaid test invoice (2026-11-08, $0 balance).
+    UNPAID = (
+        "Total\n$1.020,00\nInvoice Status\nPayment Pending\nAwaiting payment\n"
+        "Total Due\n$1.020,00\n\nRemaining\n$1.020,00\nPay Invoice\n"
+    )
+
+    def test_invoice_state(self):
+        self.assertEqual(invoice_state(self.UNPAID), ("Payment Pending", "$1.020,00"))
+        self.assertEqual(invoice_state("Invoice Status\nPaid\n"), ("Paid", None))
+        self.assertEqual(invoice_state("nothing here"), ("?", None))
+
+    def test_credit_option_never_matches_a_gateway(self):
+        for text in ("Account credit", "Pay with credits", "使用餘額付款", "余额支付", "Balance ($300,00)"):
+            self.assertTrue(CREDIT_OPTION.search(text), text)
+        for text in ("PayPal", "USDT (TRC20)", "Alipay (CNY)", "WeChat Pay (CNY)", "Credit Card", "Pay Now"):
+            self.assertFalse(CREDIT_OPTION.search(text), text)
 
 
 class MatchTest(unittest.TestCase):

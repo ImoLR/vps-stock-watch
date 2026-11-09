@@ -25,7 +25,9 @@ The order is paid from the account balance: the cart's ``use_credits`` is
 on by default and the buyer leaves it alone. (Changing it is a Livewire
 round trip, and every finished round trip resets Turnstile; turning it off
 also made checkout hang without creating an order.) With a short balance the
-invoice stays unpaid and Telegram says so. Either way the buyer stops after
+invoice stays unpaid: Telegram says so at once with the pay link, the buyer
+tries to pay it from the balance, then reports the result. If Checkout gets
+no answer for a while, Telegram tells the user to step in by hand. Either way the buyer stops after
 one order (marker file; resume from Telegram /autobuy). A ``--test-url`` run
 reads the balance first and only checks out when the balance is below the
 order total, so the test invoice cannot be paid.
@@ -91,8 +93,17 @@ DEFAULTS: Dict[str, Any] = {
     # page is open but not listed yet, re-check the menu every hidden_poll_seconds.
     "public_delay_seconds": 4,
     "hidden_poll_seconds": 120,
+    # Checkout has hung without an answer on this site. After
+    # checkout_alert_seconds Telegram tells the user to go and buy or pay by
+    # hand (user, 2026-11-09); the buyer keeps waiting up to
+    # checkout_wait_seconds, then looks for the invoice itself.
+    "checkout_alert_seconds": 20,
+    "checkout_wait_seconds": 90,
 }
 INVOICE_PATH = re.compile(r"/invoices/([^/?#]+)")
+# A pay option that takes the account balance. Not "credit card": that is a
+# gateway, and paying through it only redirects.
+CREDIT_OPTION = re.compile(r"餘額|余额|account credit|\bcredits\b|\bbalance\b", re.I)
 
 
 # --------------------------------------------------------------------------
@@ -124,6 +135,13 @@ def money_amounts(text: Any) -> List[float]:
         if value is not None:
             found.append(value)
     return found
+
+
+def invoice_state(text: str) -> Tuple[str, Optional[str]]:
+    """(status, amount still due) from an invoice page's text."""
+    status = re.search(r"Invoice Status\s*\n\s*([^\n]+)", text)
+    remaining = re.search(r"Remaining\s*\n\s*(\$\s*[\d.,]+)", text)
+    return (status.group(1).strip() if status else "?"), (remaining.group(1) if remaining else None)
 
 
 def name_matches(name: str, include: Iterable[str], exclude: Iterable[str]) -> bool:
@@ -618,15 +636,34 @@ class FacAutoBuyer:
         if not self.wait_turnstile():
             return self.order_failed(checkout_url, name, "结账页人机验证没有通过")
         self.page.click('[wire\\:name="cart"] button[wire\\:click="checkout"]')
+        # Checkout has hung on this site without an answer; give a busy sale
+        # server time, then look for the invoice ourselves. Tell the user early
+        # so they can step in by hand meanwhile.
+        alert_after = float(self.cfg["checkout_alert_seconds"])
+        wait_total = max(float(self.cfg["checkout_wait_seconds"]), alert_after)
         try:
-            # Checkout has hung once on this site without an answer; give a
-            # busy sale server time, then look for the invoice ourselves.
-            self.page.wait_for_url(lambda url: "/invoices/" in url, timeout=90000)
+            self.page.wait_for_url(lambda url: "/invoices/" in url, timeout=alert_after * 1000)
         except Exception:
-            errors = self.page_errors()
-            self.unconfirmed_checkout = True
-            if not self.open_new_invoice():
-                return self.order_failed(checkout_url, name, "结账没有回应：%s" % errors)
+            if not test:
+                self.notify(
+                    "⏳ <b>FAC 结账卡住了，请你马上上去手动买</b>\n%s · %s\n"
+                    "点了 Checkout %d 秒还没回应。先看账单页有没有新账单：有就直接付那张，"
+                    "<b>别再下一单</b>；没有就在购物车里自己点结账，或者重新下单。\n"
+                    "账单：%s\n购物车：%s\n商品：%s\n程序再等 %d 秒，然后去账单页查，有结果会再发消息。"
+                    % (html.escape(name), html.escape(plan_label), alert_after,
+                       html.escape(urljoin(self.base_url, "invoices")),
+                       html.escape(urljoin(self.base_url, "cart")),
+                       html.escape(checkout_url), wait_total - alert_after)
+                )
+            try:
+                self.page.wait_for_url(
+                    lambda url: "/invoices/" in url, timeout=(wait_total - alert_after) * 1000
+                )
+            except Exception:
+                errors = self.page_errors()
+                self.unconfirmed_checkout = True
+                if not self.open_new_invoice():
+                    return self.order_failed(checkout_url, name, "结账没有回应：%s" % errors)
         self.unconfirmed_checkout = False
         time.sleep(3)
         return self.record_order(checkout_url, name, plan_label, cart_total, use_credits, test)
@@ -652,10 +689,7 @@ class FacAutoBuyer:
         invoice_url = self.page.url.split("?")[0]
         match = INVOICE_PATH.search(invoice_url)
         invoice = match.group(1) if match else invoice_url
-        text = self.body_text()
-        status_match = re.search(r"Invoice Status\s*\n\s*([^\n]+)", text)
-        invoice_status = status_match.group(1).strip() if status_match else "?"
-        remaining = re.search(r"Remaining\s*\n\s*(\$\s*[\d.,]+)", text)
+        invoice_status, remaining = invoice_state(self.body_text())
         paid = invoice_status.lower() == "paid"
         result = {
             "at": _now_iso(),
@@ -665,7 +699,7 @@ class FacAutoBuyer:
             "invoice": invoice,
             "invoice_url": invoice_url,
             "invoice_status": invoice_status,
-            "remaining": remaining.group(1) if remaining else None,
+            "remaining": remaining,
             "cart_total": cart_total,
             "use_credits": use_credits,
             "test": test,
@@ -678,24 +712,73 @@ class FacAutoBuyer:
                    html.escape(invoice_status), html.escape(invoice_url))
             )
             return OrderResult.BOUGHT
+        # The order exists: write the marker before anything else can fail.
         self.marker_path.parent.mkdir(parents=True, exist_ok=True)
         self.marker_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        title = "%s · %s" % (html.escape(name), html.escape(plan_label))
+        if not paid:
+            # Tell the user first, so they can pay by hand if this attempt stalls too.
+            self.notify(
+                "🛒 <b>FAC 已下单，但还没付清</b>\n%s\n账单 %s：%s，待付 %s\n"
+                "程序正在尝试用余额付款，结果马上再发。你也可以直接上去付：%s"
+                % (title, html.escape(invoice), html.escape(invoice_status),
+                   html.escape(remaining or "?"), html.escape(invoice_url + "?pay=1"))
+            )
+            why = self.pay_with_credits(invoice_url)
+            try:
+                self.goto(invoice_url)
+                invoice_status, remaining = invoice_state(self.body_text())
+            except Exception:
+                LOG.exception("could not re-read invoice %s", invoice)
+            paid = invoice_status.lower() == "paid"
+            result.update(invoice_status=invoice_status, remaining=remaining, pay_attempt=why)
+            self.marker_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         summary = "%s %s 账单 %s %s" % (name, plan_label, invoice, invoice_status)
         if paid:
             self.notify(
-                "🎉 <b>FAC 抢到了，已用余额付款</b>\n%s · %s\n账单 %s：已付款\n%s"
-                % (html.escape(name), html.escape(plan_label), html.escape(invoice), html.escape(invoice_url))
+                "🎉 <b>FAC 抢到了，已用余额付款</b>\n%s\n账单 %s：已付款\n%s"
+                % (title, html.escape(invoice), html.escape(invoice_url))
             )
         else:
             self.notify(
-                "🛒 <b>FAC 已下单，但还没付清</b>（余额不够？）\n%s · %s\n账单 %s：%s，待付 %s\n"
-                "请尽快手动付款：%s"
-                % (html.escape(name), html.escape(plan_label), html.escape(invoice),
-                   html.escape(invoice_status), html.escape(result["remaining"] or "?"),
-                   html.escape(invoice_url))
+                "🚨 <b>FAC 余额付款没成功，请马上手动付款</b>\n%s\n账单 %s：%s，待付 %s\n原因：%s\n%s"
+                % (title, html.escape(invoice), html.escape(invoice_status),
+                   html.escape(remaining or "?"), html.escape(why),
+                   html.escape(invoice_url + "?pay=1"))
             )
         self.switch.bought(summary)
         return OrderResult.BOUGHT
+
+    def pay_with_credits(self, invoice_url: str) -> str:
+        """Best effort: pay an unpaid invoice from the balance. Returns what happened.
+
+        Untested on a real unpaid invoice with enough balance (the page was
+        only seen with $0 balance: gateways + "Pay Now", no balance option).
+        It only clicks an option that names the balance, never a gateway.
+        """
+        try:
+            self.goto(invoice_url + "?pay=1")
+            option = self.page.locator('main label, main button, main [role="radio"]').filter(
+                has_text=CREDIT_OPTION
+            )
+            if not option.count():
+                return "付款页没有余额付款选项（余额可能不够）"
+            option.first.click()
+            time.sleep(2)
+            pay = self.page.locator("main button").filter(
+                has_text=re.compile(r"pay now|立即付款|確認付款|确认付款", re.I)
+            )
+            if not pay.count():
+                return "付款页找不到 Pay Now 按钮"
+            pay.last.click()
+            for _ in range(30):
+                time.sleep(1)
+                if invoice_state(self.body_text())[0].lower() == "paid":
+                    return "已用余额付款"
+            return "点了余额付款，30 秒内账单还没变成已付款"
+        except Exception as exc:  # incl. BlockedError: the user must still hear about it
+            LOG.exception("paying %s from the balance failed", invoice_url)
+            return "余额付款出错：%s" % exc
 
     def page_errors(self) -> str:
         try:
