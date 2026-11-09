@@ -35,6 +35,25 @@
 
 ### DMIT
 
+**2026-11-10 起（用户）只盯特价机，不再加载常规目录。** 配置 `watch_pids` 后，每 30 分钟
+开一个浏览器，依次打开各 PID 的 `cart.php?a=add&pid=<PID>`（间隔 `pid_spacing_seconds`，
+同一会话只过一次 Cloudflare）。有货页会跳到 `a=confproduct`，`.product-title` 是商品名，
+`select#inputBillingcycle` 是各周期价格；无货页只有 `Out of Stock`，没有商品名和价格
+（价格沿用上次读到的）。只通知补货；有货但商品名不含 `keywords`（`a+b` 表示都要有）时
+当作 PID 被挪给了别的商品，单独提醒一次，不算补货。DMIT 出 v2 时会换新 PID
+（Victoria 178 → 205，LokMaChau 187 → 206）。弥敦道 Nathan 不公开卖，没有 PID。
+
+快的信号是 TG 推送（2026-11-10 起，用户要求不轮询）：`fac_tg_watch` 用已登录的 TG 用户账号
+同时收 `watch_channels` 里的 DMIT 频道（@dmitnews、@DMIT_INC_CN），新帖一到，
+只要提到监控的特价机就转发，并把 `act.dmithost.net` 短链解析成 PID（重定向的 `Location`
+里带 `pid=`），标出是否已在监控（`watched_pids_from: dmit` 直接读上面的 `watch_pids`）。
+断线后每 10 分钟补一次漏掉的帖子。@DMITstock（交易/拼车/补货）不收（用户 11-10）：基本是网友
+收/出交易帖，而且帖子到这个账号都是空消息。交易类频道如要再加，用单独一项配
+`require_words` / `skip_words`。`tg_channel` provider（读 `t.me/s/<频道>` 公开网页）已停用，
+留作 TG 登录失效时的后备。普通 HTTP 访问 dmit.io 一律是 Cloudflare 403，没有可用的 JSON 库存接口。
+
+以下是常规目录模式（不配 `watch_pids` 时）的说明。
+
 DMIT 当前仍是 WHMCS 商城。目录主源是：
 
 `https://www.dmit.io/cart.php`

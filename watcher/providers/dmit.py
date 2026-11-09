@@ -3,24 +3,196 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from bs4 import BeautifulSoup, Tag
 
-from ..models import Product
-from .base import BaseProvider, FetchError, ParseError
+from ..models import Change, ChangeType, Product
+from .base import BaseProvider, FetchError, ParseError, is_challenge_page
 
 
 LOG = logging.getLogger(__name__)
 
 
+def keyword_hit(text: str, keywords: List[str]) -> bool:
+    """Any keyword in ``text`` (case-insensitive); "tyo+tiny" needs both parts."""
+    lowered = (text or "").lower()
+    return any(
+        all(part.strip().lower() in lowered for part in str(keyword).split("+") if part.strip())
+        for keyword in keywords
+        if str(keyword).strip()
+    )
+
+
 class DmitProvider(BaseProvider):
+    """DMIT stock.
+
+    With ``watch_pids`` (2026-11-10, user): only the listed special plans are
+    checked, one order page each in a single browser session; the public
+    catalog (regular plans) is not loaded at all. Only a restock of a listed
+    plan, or a listed PID now showing a different product, is notified.
+    """
+
     CATALOG_URL = "https://www.dmit.io/cart.php"
 
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        # Sold-out order pages show no prices: keep the last ones read.
+        self._plans: Dict[str, Dict[str, str]] = {}
+
+    def restore_state(self, provider_state: Dict[str, Any]) -> None:
+        for item in (provider_state.get("products") or {}).values():
+            if isinstance(item, dict) and item.get("pricing"):
+                self._plans[str(item.get("product_id"))] = dict(item["pricing"])
+
     def fetch_products(self) -> List[Product]:
+        if self.config.get("watch_pids"):
+            return self._watched_products()
         html = self._fetch_catalog_html()
         products = self.parse_catalog(html)
         return self._merge_extra_pid_probes(products)
+
+    # -- watched special plans ----------------------------------------------
+    def _watched_products(self) -> List[Product]:
+        specs = [dict(spec) for spec in self.config["watch_pids"]]
+        urls = ["https://www.dmit.io/cart.php?a=add&pid=%s" % spec["pid"] for spec in specs]
+        pages = self._browser_pages(urls)
+        products = []
+        for spec, url, (final_url, page_html) in zip(specs, urls, pages):
+            products.append(self._watched_product(spec, url, final_url, page_html))
+        return products
+
+    def _watched_product(self, spec: Dict[str, Any], url: str, final_url: str, page_html: str) -> Product:
+        pid = str(spec["pid"])
+        in_stock, page_name, plans = self.parse_order_page(page_html, final_url)
+        if plans:
+            self._plans[pid] = plans
+        keywords = [str(value) for value in spec.get("keywords") or [spec.get("name") or ""]]
+        mismatch = bool(in_stock and page_name and not keyword_hit(page_name, keywords))
+        pricing = dict(self._plans.get(pid, {}))
+        return Product(
+            provider=self.name,
+            product_id=pid,
+            name=str(spec.get("name") or page_name or "DMIT PID %s" % pid),
+            category="特价",
+            region=spec.get("region"),
+            price=pricing.get("annually"),
+            billing_cycle="yearly" if pricing.get("annually") else None,
+            available=in_stock and not mismatch,
+            url=url,
+            pricing=pricing,
+            metadata={
+                "discovery": {"type": "watch_pid", "hidden": False, "source": "watch_pids"},
+                "stock_source": "order_page",
+                "page_name": page_name,
+                "pid_reused": mismatch,
+            },
+        )
+
+    @staticmethod
+    def parse_order_page(page_html: str, final_url: str = "") -> Tuple[bool, Optional[str], Dict[str, str]]:
+        """(in stock, product name shown, {cycle: price}) of an add-to-cart page."""
+        soup = BeautifulSoup(page_html, "lxml")
+        title = soup.select_one(".product-title") or soup.select_one(".cart-products-title")
+        name = " ".join(title.get_text(" ", strip=True).split()) if title else None
+        plans: Dict[str, str] = {}
+        for option in soup.select("select#inputBillingcycle option"):
+            value = str(option.get("value") or "").strip().lower()
+            text = " ".join(option.get_text(" ", strip=True).split())
+            match = re.search(r"\$[\d,.]+\s*USD", text)
+            if value and match:
+                plans[value] = match.group(0)
+        lowered = soup.get_text(" ", strip=True).lower()
+        if "out of stock" in lowered or "orders for it have been suspended" in lowered:
+            return False, name, plans
+        if name and ("confproduct" in final_url or plans):
+            return True, name, plans
+        raise ParseError("DMIT order page %s had no recognized stock signal" % (final_url or "?"))
+
+    def _browser_pages(self, urls: List[str]) -> List[Tuple[str, str]]:
+        """Load ``urls`` one by one in one browser (one Cloudflare pass)."""
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+
+        spacing = max(0.0, float(self.config.get("pid_spacing_seconds", 5)))
+        wait_ms = self.timeout * 1000
+        results: List[Tuple[str, str]] = []
+        started = time.monotonic()
+        try:
+            with sync_playwright() as playwright:
+                options: Dict[str, Any] = {
+                    "headless": bool(self.config.get("browser_headless", True)),
+                    "args": list(self.config.get("browser_args", [])),
+                }
+                if self.proxy:
+                    options["proxy"] = {"server": self.proxy}
+                browser = playwright.chromium.launch(**options)
+                try:
+                    context = browser.new_context(
+                        locale=self.config.get("browser_locale", "en-US"), service_workers="block"
+                    )
+                    page = context.new_page()
+                    blocked_types = set(
+                        self.config.get("browser_block_resource_types", ["image", "media", "font"])
+                    )
+                    page.route(
+                        "**/*",
+                        lambda route: (
+                            route.abort()
+                            if route.request.resource_type in blocked_types
+                            else route.continue_()
+                        ),
+                    )
+                    LOG.debug("dmit: browser up in %.1f s", time.monotonic() - started)
+                    for index, url in enumerate(urls):
+                        if index:
+                            time.sleep(spacing)
+                        loaded_at = time.monotonic()
+                        page.goto(url, wait_until="domcontentloaded", timeout=wait_ms)
+                        # The Cloudflare check page swaps itself for the real one.
+                        page.wait_for_function(
+                            "() => !/just a moment/i.test(document.title)", timeout=wait_ms
+                        )
+                        page.wait_for_timeout(int(self.config.get("browser_settle_ms", 1500)))
+                        text = page.content()
+                        if is_challenge_page(text) and "product-title" not in text and "out of stock" not in text.lower():
+                            raise FetchError("browser received a challenge page for %s" % url, blocked=True)
+                        results.append((page.url, text))
+                        LOG.debug("dmit: %s in %.1f s", url, time.monotonic() - loaded_at)
+                finally:
+                    browser.close()
+        except PlaywrightError as exc:
+            raise FetchError(
+                "browser failure after %d/%d DMIT pages: %s" % (len(results), len(urls), str(exc).splitlines()[0]),
+                blocked=True,
+            ) from exc
+        return results
+
+    def additional_changes(self, products: List[Product], previous_state: Dict[str, Any]) -> List[Change]:
+        """A watched PID that now sells something else (DMIT reuses PIDs)."""
+        changes = []
+        old_products = previous_state.get("products") or {}
+        for product in products:
+            if not product.metadata.get("pid_reused"):
+                continue
+            old = old_products.get(product.key) or {}
+            if (old.get("metadata") or {}).get("pid_reused"):
+                continue
+            shown = Product.from_dict(product.to_dict())
+            shown.name = str(product.metadata.get("page_name"))
+            changes.append(Change(ChangeType.NAME, shown, product, ["name", "pid_reused"]))
+        return changes
+
+    def should_notify(self, change: Change) -> bool:
+        if not self.config.get("watch_pids"):
+            return super().should_notify(change)
+        if change.type == ChangeType.RESTOCK:
+            return True
+        if change.type == ChangeType.NEW:
+            return bool(change.product.available)
+        if change.type == ChangeType.SOLD_OUT:
+            return bool(self.config.get("notify_sold_out", False))
+        return change.type == ChangeType.NAME and "pid_reused" in change.fields
 
     def _fetch_catalog_html(self) -> str:
         fetch_mode = str(self.config.get("fetch_mode", "auto")).lower()

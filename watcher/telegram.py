@@ -593,6 +593,34 @@ def format_interval_invalid(minimum: int, maximum: int) -> str:
     )
 
 
+def format_channel_post(
+    source: str,
+    labels: List[str],
+    text: str,
+    links: List[Dict[str, Any]],
+    url: Optional[str],
+    when: Optional[str] = None,
+) -> str:
+    """A vendor channel post that names a watched plan (DMIT special plans)."""
+    lines = ["<b>📣 %s 新帖（%s）</b>" % (html.escape(source), html.escape("、".join(labels)))]
+    if when:
+        lines.append(html.escape(when))
+    lines.extend(["", html.escape(text[:1200])])
+    for item in links:
+        if item.get("pid"):
+            lines.append(
+                "PID %s：%s %s"
+                % (
+                    html.escape(str(item["pid"])),
+                    html.escape("https://www.dmit.io/cart.php?a=add&pid=%s" % item["pid"]),
+                    "（已在监控）" if item.get("watched") else "（新 PID，还没在监控里）",
+                )
+            )
+    if url:
+        lines.extend(["", '<a href="%s">打开频道帖子</a>' % html.escape(url, quote=True)])
+    return "\n".join(lines)
+
+
 def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
     product, old = change.product, change.old
     provider = _provider_name(product.provider)
@@ -615,6 +643,12 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
         if product.url:
             lines.extend(["", '<a href="%s">打开活动分类</a>' % html.escape(product.url, quote=True)])
         return "\n".join(lines)
+    if product.metadata.get("catalog_event") == "channel_post":
+        meta = product.metadata
+        return format_channel_post(
+            provider, meta.get("labels") or [], str(meta.get("text") or product.name),
+            meta.get("links") or [], product.url,
+        )
     if (
         change.type == ChangeType.NEW
         and product.metadata.get("catalog_event") == "region"
@@ -640,6 +674,9 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
     }
     if change.type == ChangeType.NEW and product.metadata.get("hidden_direct_link"):
         headings[ChangeType.NEW] = "🕵️ %s 发现隐藏新品（未上架，可能是提前准备的活动直链）" % provider
+    if "pid_reused" in (getattr(change, "fields", None) or []):
+        # DMIT special plans: the watched PID now sells another product.
+        headings[ChangeType.NAME] = "⚠️ %s 监控的 PID 换成了别的产品（不算补货）" % provider
     if "listing" in (getattr(change, "fields", None) or []):
         # A known PID moved onto / off the store menu (TCSCloud).
         headings[ChangeType.NEW] = "🛒 %s 商品上架到店面" % provider
@@ -1102,6 +1139,7 @@ def _provider_name(value: str) -> str:
         "nexkr": "NexKr",
         "nnb": "NewNB",
         "dmit": "DMIT",
+        "dmitnews": "DMIT 频道",
         "blossom": "Blossom Host",
         "boilcloud": "BOILCLOUD",
         "cloudiplc": "CloudIPLC",

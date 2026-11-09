@@ -16,6 +16,10 @@ What is relayed:
 
 Relayed messages with a FAC link or a sale keyword are also queued for the
 FAC auto-buyer (``autobuy_trigger_dir``; see watcher.fac_autobuy).
+
+``watch_channels`` (2026-11-10, user): other vendors' channels the account
+follows (DMIT). Only posts naming a watched plan are relayed, with their
+short links resolved to PIDs; pushed like the FAC channel, never polled.
 """
 from __future__ import annotations
 
@@ -33,10 +37,13 @@ from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
+import requests
+
 from .config import load_config, telegram_credentials
 from .fac_trigger import post_trigger
+from .providers.tgchannel import keyword_labels, resolve_links
 from .telegram import TelegramClient as BotClient
-from .telegram import TelegramError
+from .telegram import TelegramError, format_channel_post
 
 
 LOG = logging.getLogger("fac_tg_watch")
@@ -183,6 +190,30 @@ def _display(entity: Any) -> str:
     return "%s%s" % (name, " @%s" % username if username else "")
 
 
+def vendor_channel(item: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    """One ``watch_channels`` entry; ``watched_pids_from`` copies a provider's
+    ``watch_pids`` so the two lists cannot drift apart."""
+    watched = {str(pid) for pid in item.get("watched_pids") or []}
+    source = item.get("watched_pids_from")
+    if source:
+        for provider in config.get("providers") or []:
+            if provider.get("name") == source:
+                watched.update(str(spec["pid"]) for spec in provider.get("watch_pids") or [])
+    return {
+        "name": str(item.get("name") or "频道"),
+        "ids": [int(value) for value in item["ids"]],
+        # Trading channels: a post must also say "restock" and not "buy/sell".
+        "require_words": [str(word) for word in item.get("require_words") or []],
+        "skip_words": [str(word) for word in item.get("skip_words") or []],
+        "keywords": {
+            str(label): [str(alias) for alias in aliases]
+            for label, aliases in (item.get("keywords") or {}).items()
+        },
+        "hosts": [str(host) for host in item.get("resolve_hosts") or []],
+        "watched": watched,
+    }
+
+
 class FacTelegramWatch:
     def __init__(self, config: Dict[str, Any], bot: Optional[BotClient]):
         from telethon import TelegramClient
@@ -207,6 +238,15 @@ class FacTelegramWatch:
         self.admins: Set[int] = set()
         self._admins_at = 0.0
         self._lock = asyncio.Lock()
+        self.vendor_channels = [
+            vendor_channel(item, config) for item in self.cfg.get("watch_channels") or []
+        ]
+        self.vendor_by_id = {
+            chat_id: vendor for vendor in self.vendor_channels for chat_id in vendor["ids"]
+        }
+        self.state.data.setdefault("vendor_last_ids", {})
+        self._empty_logged: Set[int] = set()
+        self.http = requests.Session()
 
     async def notify(self, message: str) -> None:
         if not self.bot:
@@ -301,6 +341,72 @@ class FacTelegramWatch:
             format_relay("group", message.date, message.raw_text, urls, link, _display(sender), reason)
         )
 
+    async def handle_vendor(self, message: Any) -> None:
+        chat_id = int(message.chat_id)
+        vendor = self.vendor_by_id.get(chat_id)
+        if vendor is None:
+            return
+        async with self._lock:
+            last = self.state.data["vendor_last_ids"].get(str(chat_id))
+            if last is not None and message.id <= last:
+                return
+            self.state.data["vendor_last_ids"][str(chat_id)] = message.id
+            self.state.save()
+        text = message.raw_text or ""
+        urls = message_urls(text, message.entities, message.buttons)
+        if not text and not urls:
+            if chat_id not in self._empty_logged:
+                # @DMITstock posts arrived empty on 11-10; keep one for a look.
+                self._empty_logged.add(chat_id)
+                LOG.info("empty post %s/%s: %s", chat_id, message.id, str(message.to_dict())[:1500])
+            return
+        labels = keyword_labels(text, urls, vendor["keywords"])
+        if not labels:
+            return
+        if vendor["skip_words"] and matches_keyword(text, vendor["skip_words"]):
+            LOG.info("vendor post %s/%s skipped (trade post): %s", chat_id, message.id, text[:80])
+            return
+        if vendor["require_words"] and not matches_keyword(text, vendor["require_words"]):
+            return
+        links = await asyncio.to_thread(
+            resolve_links, self.http, urls, vendor["hosts"], vendor["watched"]
+        )
+        chat = await message.get_chat()
+        username = getattr(chat, "username", None)
+        link = (
+            "https://t.me/%s/%s" % (username, message.id)
+            if username
+            else "https://t.me/c/%s/%s" % (str(chat_id)[4:], message.id)
+        )
+        LOG.info("vendor post %s/%s: %s", chat_id, message.id, labels)
+        await self.notify(
+            format_channel_post(
+                "%s · %s" % (vendor["name"], getattr(chat, "title", None) or chat_id),
+                labels,
+                text,
+                links,
+                link,
+                message.date.astimezone(CST).strftime("%m-%d %H:%M") if message.date else None,
+            )
+        )
+
+    async def catch_up_vendors(self) -> None:
+        for chat_id in self.vendor_by_id:
+            last = self.state.data["vendor_last_ids"].get(str(chat_id))
+            if last is None:
+                latest = await self.client.get_messages(chat_id, limit=1)
+                self.state.data["vendor_last_ids"][str(chat_id)] = latest[0].id if latest else 0
+                self.state.save()
+                continue
+            missed = []
+            async for message in self.client.iter_messages(chat_id, min_id=last, reverse=True, limit=50):
+                missed.append(message)
+            for message in missed:
+                try:
+                    await self.handle_vendor(message)
+                except Exception:
+                    LOG.exception("vendor post handling failed")
+
     async def catch_up(self) -> None:
         """Relay channel posts missed while disconnected (cheap, one API call)."""
         last = self.state.data["channel_last_id"]
@@ -322,6 +428,10 @@ class FacTelegramWatch:
                 await self.catch_up()
             except Exception:
                 LOG.exception("channel catch-up failed")
+            try:
+                await self.catch_up_vendors()
+            except Exception:
+                LOG.exception("vendor channel catch-up failed")
 
     async def run(self) -> int:
         from telethon import events
@@ -341,6 +451,22 @@ class FacTelegramWatch:
             await self.refresh_admins(force=True)
             first_start = self.state.data["channel_last_id"] is None
             await self.catch_up()
+            for chat_id in list(self.vendor_by_id):
+                try:
+                    await self.client.get_entity(chat_id)
+                except Exception:
+                    LOG.exception("cannot open vendor channel %s; skipping it", chat_id)
+                    self.vendor_by_id.pop(chat_id)
+            await self.catch_up_vendors()
+            if self.vendor_by_id:
+                LOG.info("watching vendor channels: %s", sorted(self.vendor_by_id))
+
+                @self.client.on(events.NewMessage(chats=list(self.vendor_by_id)))
+                async def on_vendor(event):  # noqa: ANN001
+                    try:
+                        await self.handle_vendor(event.message)
+                    except Exception:
+                        LOG.exception("vendor post handling failed")
 
             @self.client.on(events.NewMessage(chats=[self.channel_id]))
             async def on_channel(event):  # noqa: ANN001

@@ -54,6 +54,30 @@ fac_tg_watch:
   admin_refresh_seconds: 3600
   # Relayed posts with a FAC link or sale keyword also wake the auto-buyer.
   autobuy_trigger_dir: data/autobuy/fac_triggers
+  # 2026-11-10 (user): DMIT channels in the account's VPS公告群 folder, pushed
+  # like the FAC channel. Only posts naming a watched special plan are sent;
+  # act.dmithost.net short links are resolved to PIDs (one request each).
+  # @DMIT_INC (English) is left out: it mirrors @DMIT_INC_CN.
+  watch_channels:
+    - name: DMIT
+      ids:
+        - -1001986550569  # DMIT活动推送 @dmitnews
+        - -1001343393147  # LANG=zh_CN tail -f /var/log/DMIT.log @DMIT_INC_CN
+      resolve_hosts: [act.dmithost.net]
+      watched_pids_from: dmit
+      keywords:
+        旺角 MongKok: [mongkok, 旺角]
+        维多利亚 Victoria: [victoria, 维多利亚]
+        落马洲 LokMaChau: [lokmachau, 落马洲]
+        荃湾 TsuenWan: [tsuenwan, 荃湾]
+        弥敦道 Nathan: [nathan, 弥敦]
+        品川 Shinagawa: [shinagawa, 品川]
+        东京 TINY: ["tyo+tiny", tyoprotiny]
+        Malibu: [malibu]
+    # Not watched (user, 2026-11-10): @DMITstock -1001785967044 ("DMIT交易/拼车/
+    # 补货") is mostly members' buy/sell posts, and its posts reach this
+    # account empty (likely on purpose). A trading channel can be added back
+    # as its own entry with require_words / skip_words.
 
 # FACHOST auto-buyer (watcher.fac_autobuy, deploy/fac-autobuy.service; user,
 # 2026-11-08). It never polls on its own: the TG relay above and the
@@ -101,33 +125,69 @@ providers:
     timeout_seconds: 20
     max_backoff_seconds: 1800
 
+  # 2026-11-10 (user): only DMIT's special plans; the regular catalog is not
+  # loaded or reported. One browser session per round opens each order page
+  # (pid_spacing_seconds apart); only a restock is notified, or a PID that now
+  # sells another product (DMIT moves plans to new PIDs, e.g. Victoria v2).
+  # Nathan (弥敦道) is not sold publicly; no PID known. PIDs from @dmitnews
+  # short links (act.dmithost.net), resolved 2026-11-09.
   - name: dmit
     type: dmit
     enabled: true
-    catalog_url: https://www.dmit.io/cart.php
-    interval_seconds: 60
-    timeout_seconds: 35
+    # 11-09: dmit.io Cloudflare blocks the AWS HK IP -> egress via Boil Hinet 马年 (dmit-egress.service, ssh -D)
+    proxy: socks5://127.0.0.1:1081
+    interval_seconds: 1800
+    timeout_seconds: 45
     isolate_process: true
-    scan_timeout_seconds: 75
+    scan_timeout_seconds: 300
     scan_memory_high_mb: 700
     scan_memory_max_mb: 800
-    failure_retry_seconds: 30
-    max_backoff_seconds: 300
-    selector_retry_attempts: 1
-    selector_retry_backoff_seconds: 2
-    fetch_mode: auto
+    failure_retry_seconds: 300
+    max_backoff_seconds: 3600
+    pid_spacing_seconds: 5
+    notify_sold_out: false
     # DMIT blocks Chromium's headless signature on the currently tested host.
     # Run the watcher under xvfb-run so Playwright can use headed mode.
     browser_headless: false
     browser_args:
       - --disable-blink-features=AutomationControlled
       - --renderer-process-limit=2
-    browser_wait_selector: .cart-products-box[pid]
-    browser_wait_state: attached
     browser_settle_ms: 1500
-    # Optional known/hidden PIDs not present in the catalog. Each adds one
-    # cart.php?a=add&pid=... request per DMIT check, so keep this list short.
-    extra_pids: []
+    # keywords: the order page's product name must contain one ("a+b" = both),
+    # otherwise the PID is treated as reused for another product.
+    watch_pids:
+      - {pid: 217, name: HKG.Pro.MongKok, region: Hong Kong, keywords: [mongkok]}
+      - {pid: 178, name: HKG.Pro.Victoria, region: Hong Kong, keywords: [victoria]}
+      - {pid: 205, name: HKG.Pro.Victoria v2, region: Hong Kong, keywords: [victoria]}
+      - {pid: 187, name: HKG.Pro.LokMaChau, region: Hong Kong, keywords: [lokmachau]}
+      - {pid: 206, name: HKG.Pro.LokMaChau v2, region: Hong Kong, keywords: [lokmachau]}
+      - {pid: 233, name: HKG.Pro.TsuenWan, region: Hong Kong, keywords: [tsuenwan]}
+      - {pid: 179, name: TYO.Pro.Shinagawa, region: Tokyo, keywords: [shinagawa]}
+      - {pid: 138, name: TYO.Pro.TINY, region: Tokyo, keywords: ["tyo+tiny"]}
+      - {pid: 186, name: LAX.Pro.MALIBU, region: Los Angeles, keywords: [malibu]}
+
+  # Off since 2026-11-10 (user): @dmitnews is now pushed through
+  # fac_tg_watch.watch_channels; this polled its public web page every 150 s.
+  # Kept as a fallback if the TG session is lost.
+  - name: dmitnews
+    type: tg_channel
+    enabled: false
+    channel: dmitnews
+    interval_seconds: 150
+    timeout_seconds: 20
+    max_backoff_seconds: 1800
+    resolve_hosts: [act.dmithost.net]
+    resolve_spacing_seconds: 3
+    watched_pids: [217, 178, 205, 187, 206, 233, 179, 138, 186]
+    keywords:
+      旺角 MongKok: [mongkok, 旺角]
+      维多利亚 Victoria: [victoria, 维多利亚]
+      落马洲 LokMaChau: [lokmachau, 落马洲]
+      荃湾 TsuenWan: [tsuenwan, 荃湾]
+      弥敦道 Nathan: [nathan, 弥敦]
+      品川 Shinagawa: [shinagawa, 品川]
+      东京 TINY: ["tyo+tiny", tyoprotiny]
+      Malibu: [malibu]
 
   # Disabled 2026-11-06 at the user's request; code kept for a later rerun.
   - name: blossom
