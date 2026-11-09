@@ -46,6 +46,13 @@ class BaseProvider(ABC):
             }
         )
         self.session.headers.update(config.get("headers", {}))
+        # Optional per-provider egress, e.g. "socks5://127.0.0.1:1081" (an SSH -D
+        # tunnel) for a site that blocks this host's own IP. Used by both
+        # requests and the Playwright fallback; DNS resolves at the proxy.
+        self.proxy = str(config.get("proxy") or "").strip()
+        if self.proxy:
+            remote_dns = self.proxy.replace("socks5://", "socks5h://", 1)
+            self.session.proxies.update({"http": remote_dns, "https": remote_dns})
 
     @abstractmethod
     def fetch_products(self) -> List[Product]:
@@ -119,10 +126,13 @@ class BaseProvider(ABC):
         try:
             with sync_playwright() as playwright:
                 headless = bool(self.config.get("browser_headless", True))
-                browser = playwright.chromium.launch(
-                    headless=headless,
-                    args=list(self.config.get("browser_args", [])),
-                )
+                launch_options = {
+                    "headless": headless,
+                    "args": list(self.config.get("browser_args", [])),
+                }
+                if self.proxy:
+                    launch_options["proxy"] = {"server": self.proxy}
+                browser = playwright.chromium.launch(**launch_options)
                 context_options = {
                     "locale": self.config.get("browser_locale", "en-US"),
                     "service_workers": "block",

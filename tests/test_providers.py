@@ -84,6 +84,33 @@ class ProviderTests(unittest.TestCase):
             with self.assertRaises(FetchError):
                 provider._get_text_browser("https://example.test/")
         self.assertEqual(events[-3:], ["page.close", "context.close", "browser.close"])
+        self.assertNotIn("proxy", FakePlaywright.chromium.launch_options)
+
+    def test_proxy_applies_to_requests_and_browser(self):
+        provider = DmitProvider({"name": "dmit", "type": "dmit", "proxy": "socks5://127.0.0.1:1081"})
+        self.assertEqual(provider.session.proxies["https"], "socks5h://127.0.0.1:1081")
+        launched = {}
+
+        class FakeChromium:
+            def launch(self, **kwargs):
+                launched.update(kwargs)
+                raise RuntimeError("stop after launch")
+
+        class FakePlaywrightContext:
+            def __enter__(self):
+                return types.SimpleNamespace(chromium=FakeChromium())
+
+            def __exit__(self, *_args):
+                return False
+
+        fake_sync_api = types.ModuleType("playwright.sync_api")
+        fake_sync_api.Error = RuntimeError
+        fake_sync_api.TimeoutError = TimeoutError
+        fake_sync_api.sync_playwright = lambda: FakePlaywrightContext()
+        with patch.dict(sys.modules, {"playwright.sync_api": fake_sync_api}):
+            with self.assertRaises(Exception):
+                provider._get_text_browser("https://example.test/")
+        self.assertEqual(launched["proxy"], {"server": "socks5://127.0.0.1:1081"})
 
     def test_nexkr_json_mapping(self):
         payload = json.loads((FIXTURES / "nexkr_groups.json").read_text(encoding="utf-8"))
