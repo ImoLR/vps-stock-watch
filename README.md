@@ -135,15 +135,19 @@ BOIL 的节日款以往都在 TG 频道发链接：隐藏分组 `festive-offer` 
      库存、价格全部通知，不套用旧 Provider 的 SeedNet/年付过滤。
    - 每 3 轮（15 分钟）用公开的 `feeds/productsinfo.php` 探测最高 PID 之上的 2 个 PID（起点
      `feed_start_pid: 528`）；新 PID 记成 `pid:<N>`，读一次 4 个付款周期价格，按“隐藏新品”推送一次。
-   - 每个请求间隔 5 秒；403/429/challenge 不重试，直接走失败退避。平时每天约 480 个请求。
-   - 只通知：没有 BOIL 抢购程序，隐藏链接不会被下单。
+   - 每 2 轮（10 分钟）不登录读一次 3 个公开台湾分组（A/B/D 區），只保留名称或说明含
+     SeedNet/遠傳 的商品卡。原因：用户的「馬年專輯」「蛇年專輯」HiNet 都归在公开的 A區台灣家寬，
+     SeedNet 年付可能直接上架到这些页面；这些页面本身是公开的，上面的 SeedNet 有货就以“已公开”唤醒抢购。
+   - 每个请求间隔 5 秒；403/429/challenge 不重试，直接走失败退避。平时每天约 910 个请求。
+   - festive-offer 有商品、或台湾分组出现 SeedNet，会写触发文件唤醒 BOIL 抢购程序（见下面
+     “BOIL 抢购程序”）；隐藏的 festive-offer 只通知，等公开后才下单。
 2. TG 转发并入 `watcher.fac_tg_watch`（同一个 TG 会话、同一个服务），配置在
    `fac_tg_watch.relays`：公告频道 `@BoilsHomelabChannel`（每条都转发，含维护通知）和聊天群
    「Boil不是Boli的家裡雲」`@BoilsHomelab`（含 `cloud.boil.network` 链接的消息，或 BOIL 官方账号
    发的带活动关键词的消息）。这个群一天约 800 条消息，有 44 个社区管理员和机器人
    （2026-11-11 读最近 4000 条：普通群友 0 条商城链接，管理员关键词命中 8 条，全是闲聊和机器人日报），
    所以“管理员”只算 `staff_usernames`：@zby88zby（Boil）、@BoilCloud、客服 @McDonalds_Boil、
-   @mafumafu_i。BOIL 的转发不唤醒任何抢购程序。
+   @mafumafu_i。频道帖或这几个官方账号发的 BOIL 链接会唤醒 BOIL 抢购程序。
 
 BOILCLOUD 当前使用 WHMCS 服务端商城 HTML，不使用 Playwright。普通 HTTP 请求就能在
 `div.tt-single-product[id^="product"]` 商品卡片中取得真实 PID、名称、价格、付款周期、
@@ -825,6 +829,51 @@ xvfb-run -a .venv/bin/python -m watcher.fac_autobuy --test-url <商品链接> --
 服务：`cp deploy/fac-autobuy.service /etc/systemd/system/ && systemctl daemon-reload &&
 systemctl enable --now fac-autobuy`。改了触发钩子后，`fac-tg-watch` 和 `vps-stock-watch`
 都要重启才会写触发文件。
+
+**BOIL（BOILCLOUD）抢购程序（2026-11-11 起）**
+
+`watcher.boil_autobuy`（`deploy/boil-autobuy.service`）和 FAC 一样不自己轮询，靠 BOIL TG 转发和
+`boilcloud_sale` 写到 `data/autobuy/boil_triggers/` 的触发文件唤醒，武装规则、公开规则（TG 发出
+即公开；只被网站监控看到的 festive-offer 要等出现在商城侧栏菜单才算公开，期间每 2 分钟不登录看一次
+公开页的菜单，绝不登录打开隐藏页；公开后满 4 秒才下单）、只买一台、TG `/autobuy` 暂停/恢复都和 FAC 相同。
+
+- 目标（用户 2026-11-11）：SeedNet（遠傳）年付，独立动态 IP，不要 NAT、静态 IP、盲盒；今日总价
+  （含设定费）≤ `max_total` $300；余额付款（用户开抢前充值）。预计圣诞前后出，按生肖起名
+  （2026 马年 HiNet，2027 应为羊年）。
+- 哪些触发会武装：商品直链（`cart.php?a=add&pid=N`、`/store/<分组>/<商品>`）一律试一次，名称不符就放弃；
+  分组链接只在帖子提到 SeedNet，或是 TG 发的 festive-offer 时武装；没有商城链接的 SeedNet 活动帖
+  武装 festive-offer；维护通知、HKT 补货这类帖子什么都不武装。`boilcloud_sale` 的触发带着商品卡文字，
+  没有 SeedNet 就不武装，避免一个 HKT 圣诞款让程序轮询好几天。
+- 纯 HTTP（requests），不开浏览器：WHMCS 登录页没有验证码（`recaptchaSiteKey` 为空）。登录状态
+  存在 `data/boil_cookies.json`，账号在 `data/boil_account.env`（`BOIL_EMAIL`/`BOIL_PASSWORD`），都是 0600、
+  不进 git；空闲时每 12 小时检查一次登录。
+- 下单：`cart.php?a=add&pid=N` → 配置页（`billingcycle=annually`，下拉选项取默认/第一个不加价的，
+  不勾附加项，主机名 `seednet`，随机 root 密码）→ `cart.php?a=checkout` 读 `#totalDueToday` 和
+  “可用信用餘額” → 勾服务条款提交（页面默认就选“从信用余额扣款”，程序不改）。下单这几步之间隔
+  1.5 秒（约定的抢购目标），平时轮询和菜单检查隔 4 秒。结账表单如果不是已登录账号（`custtype` 不是
+  `existing`）就不提交，先重新登录。
+- 结账 20 秒没回应就发 TG 让你手动接手；之后查账单列表有没有新账单，绝不重复下单。没付清就先发账单
+  链接，再试账单页的“使用余额”，最后报结果。
+
+手动命令（不需要 xvfb）：
+
+```bash
+.venv/bin/python -m watcher.boil_autobuy --check-login        # 登录并显示余额
+# 只用公开在售的正价商品测试；--cycle 指定该商品有的周期
+.venv/bin/python -m watcher.boil_autobuy --dry-run-url "https://cloud.boil.network/cart.php?a=add&pid=457" --cycle quarterly
+.venv/bin/python -m watcher.boil_autobuy --tos-probe-url "https://cloud.boil.network/cart.php?a=add&pid=457" --cycle quarterly
+```
+
+`--dry-run-url` 走到结账页就停下并清空购物车；`--tos-probe-url` 会真的提交结账，但不勾服务条款，
+WHMCS 会拒绝（“您必須同意我們的服務條款”），不会建单。2026-11-11 两项都在 PID 457（HKT 300Mbps，
+季付 $63 + 设定费 $3 = $66）上通过，账户服务和账单都没有新增。
+
+**BOIL 的坑（2026-11-11）**
+
+- 加值页同时有“餘額上限 $2,000.00”和“目前餘額”，读余额要认“目前餘額”。
+- 配置页的带宽升级选项带“+ $98.00 USD 設定費”，必须选不加价的那个。
+- 生肖款（马年 HiNet）后来不在任何公开分组里显示了，当时是频道发 festive-offer 链接卖的。
+- 单次充值上限 $999、下限 $3。
 
 **FAC 的坑（2026-11-08）**
 

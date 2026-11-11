@@ -1,4 +1,4 @@
-"""Hand-off from the FACHOST monitors to the FAC auto-buyer.
+"""Hand-off from the vendor monitors to the auto-buyers (FAC, BOIL).
 
 The monitors (the Telegram relay and the ``fachost_sale`` provider) run in
 other processes, so a sighting is dropped as one small JSON file in a queue
@@ -28,16 +28,19 @@ def post_trigger(
     source: str,
     urls: Iterable[str] = (),
     text: str = "",
+    **extra: Any,
 ) -> Optional[Path]:
-    """Queue one sighting. Never raises: the monitors must keep running."""
+    """Queue one sighting. Never raises: the monitors must keep running.
+    ``extra`` fields (e.g. ``public``) are passed through to the buyer."""
     if not directory:
         return None
-    payload = {
+    payload = dict(extra)
+    payload.update({
         "source": source,
         "urls": [str(url) for url in urls],
         "text": (text or "")[:2000],
         "at": time.time(),
-    }
+    })
     if not payload["urls"]:
         return None
     try:

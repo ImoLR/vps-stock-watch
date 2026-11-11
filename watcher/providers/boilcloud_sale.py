@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from ..fac_trigger import post_trigger
 from ..models import Change, Product
 from .base import BaseProvider, FetchError, is_challenge_page
 from .boilcloud import BoilcloudProvider
@@ -29,7 +30,11 @@ class BoilcloudSaleProvider(BoilcloudProvider):
     products, so empty -> listed alerts like a restock, and its cards are
     products with stock. Every ``feed_every_rounds`` the open productsinfo feed
     probes ``probe_ahead`` PIDs above the highest seen; a new PID is reported
-    once, with its prices. Notify only: these are hidden links.
+    once, with its prices. Notify only: these are hidden links. Every
+    ``watch_every_rounds`` the public ``watch_groups`` (Taiwan) are read too,
+    keeping only SeedNet cards: a SeedNet plan listed there is public. An open group
+    also wakes the BOIL buyer (``autobuy_trigger_dir``), marked public only
+    when the shop menu lists it.
     """
 
     DEFAULT_CATEGORIES = ("festive-offer",)
@@ -39,6 +44,8 @@ class BoilcloudSaleProvider(BoilcloudProvider):
         self.base_url = str(config.get("base_url", self.BASE_URL))
         # PIDs found by the feed, kept across rounds (the feed is not re-read).
         self._new_pids: Dict[str, Product] = {}
+        # Target cards (SeedNet) on public groups, kept between their reads.
+        self._group_cards: Dict[str, Product] = {}
         self._high_water = int(config.get("feed_start_pid") or 0)
         self._rounds = 0
         self._last_request: Optional[float] = None
@@ -50,6 +57,8 @@ class BoilcloudSaleProvider(BoilcloudProvider):
             product = Product.from_dict(item)
             if product.metadata.get("catalog_event") == "new_pid":
                 self._new_pids[product.product_id] = product
+            elif (product.metadata.get("discovery") or {}).get("type") == "public_group":
+                self._group_cards[product.product_id] = product
         pids = [int(item.metadata["pid"]) for item in self._new_pids.values()]
         self._high_water = max(
             [self._high_water, int(provider_state.get("high_water_pid") or 0)] + pids
@@ -93,7 +102,23 @@ class BoilcloudSaleProvider(BoilcloudProvider):
             products.append(
                 self._category_product(slug, url, bool(items), len(items), self._heading(text), listed)
             )
+        self._read_watch_groups()
+        for key, item in self._group_cards.items():
+            cards.setdefault(key, item)
         products.extend(cards[key] for key in sorted(cards, key=int))
+        for item in products:
+            if item.metadata.get("catalog_event") == "sale_category" and item.available:
+                # Wake the BOIL buyer; it orders only once the group is public
+                # (listed in the shop menu) or posted on Telegram.
+                # The card texts let the buyer skip a group with no SeedNet.
+                text = "\n".join(
+                    "%s %s" % (card.name, card.metadata.get("description") or "")
+                    for card in cards.values()
+                )
+                post_trigger(
+                    self.config.get("autobuy_trigger_dir"), "boilcloud_sale", [item.url], text,
+                    public=bool(item.metadata.get("listed_in_menu")),
+                )
 
         found: List[str] = []
         every = max(1, int(self.config.get("feed_every_rounds", 3)))
@@ -109,12 +134,45 @@ class BoilcloudSaleProvider(BoilcloudProvider):
                 if item.metadata.get("catalog_event") == "sale_category" and item.available
             ),
             "sale_products": len(cards),
+            "watched_group_cards": len(self._group_cards),
             "high_water_pid": self._high_water,
             "new_pids": found,
             "requests": self._scan_request_count,
             "duration_seconds": round(time.monotonic() - started, 3),
         }
         return products
+
+    # -- public groups (target cards only) -----------------------------------
+
+    def _read_watch_groups(self) -> None:
+        """Every ``watch_every_rounds``, read the public ``watch_groups`` and
+        keep only cards naming ``watch_keywords`` (SeedNet). These are listed
+        in the shop, so an orderable one wakes the buyer as public."""
+        groups = [str(value) for value in self.config.get("watch_groups") or []]
+        every = max(1, int(self.config.get("watch_every_rounds", 2)))
+        if not groups or self._rounds % every:
+            return
+        keywords = [str(word).casefold() for word in self.config.get("watch_keywords") or ["seednet"]]
+        found: Dict[str, Product] = {}
+        for slug in groups:
+            url = urljoin(self.base_url, "store/%s" % slug)
+            status, final_url, text = self._get(url)
+            if status != 200 or self._category_slug(final_url) != slug:
+                raise FetchError("HTTP %s for %s (%s)" % (status, url, final_url), status)
+            label = self._category_label(text, slug, [])
+            for item in self.parse_category(text, final_url, slug, label, self._category_group_id(text, slug)):
+                blob = ("%s %s" % (item.name, item.metadata.get("description") or "")).casefold()
+                if not any(word in blob for word in keywords):
+                    continue
+                item.metadata["discovery"] = {"type": "public_group", "hidden": False, "source": "store/%s" % slug}
+                found.setdefault(item.product_id, item)
+                if item.available:
+                    post_trigger(
+                        self.config.get("autobuy_trigger_dir"), "boilcloud_sale", [url],
+                        "%s %s" % (item.name, item.metadata.get("description") or ""), public=True,
+                    )
+        # Commit only after every group was read.
+        self._group_cards = found
 
     # -- festive group ---------------------------------------------------------
 

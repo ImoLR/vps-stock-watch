@@ -1,0 +1,21 @@
+[Unit]
+Description=BOILCLOUD auto-buyer (woken by fac-tg-watch and the boilcloud_sale provider)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/projects/vps-stock-watch/vps-stock-watch
+EnvironmentFile=/root/projects/vps-stock-watch/vps-stock-watch/.env
+# Plain HTTP (WHMCS has no captcha): no browser, no virtual display.
+ExecStart=/root/projects/vps-stock-watch/vps-stock-watch/.venv/bin/python -m watcher.boil_autobuy --config /root/projects/vps-stock-watch/vps-stock-watch/config.yaml
+Restart=on-failure
+RestartSec=1min
+MemoryMax=200M
+KillMode=mixed
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target

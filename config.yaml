@@ -58,8 +58,8 @@ fac_tg_watch:
   # 2026-11-11 (user): BOIL relayed the same way as FAC: every channel post;
   # group messages with a cloud.boil.network link, or a sale-word post from
   # BOIL's own accounts (the group has ~44 community admins and bots, so
-  # "admin" is narrowed to staff_usernames). No BOIL auto-buyer: nothing is
-  # queued, and hidden links stay notify-only.
+  # "admin" is narrowed to staff_usernames). A BOIL link from the channel or
+  # staff also wakes the BOIL buyer (boil_autobuy decides what to arm).
   relays:
     - name: BOIL
       channel_id: -1002036810571  # Boil の家裡雲「維護日記」 @BoilsHomelabChannel
@@ -68,6 +68,7 @@ fac_tg_watch:
       link_hosts: [cloud.boil.network]
       # Boil, the shop account and the two support accounts the channel names.
       staff_usernames: [zby88zby, BoilCloud, McDonalds_Boil, mafumafu_i]
+      autobuy_trigger_dir: data/autobuy/boil_triggers
       keywords: [
         黑五, black friday, 雙11, 双11, 雙十一, 双十一, 雙12, 双12, 雙十二, 双十二,
         年付, 年繳, 年缴, festive, 節日, 节日, 盲盒, 聖誕, 圣诞, 週年, 周年,
@@ -119,6 +120,29 @@ fac_autobuy:
   fast_minutes: 30
   slow_poll_seconds: 60
   login_check_hours: 6
+
+# BOILCLOUD auto-buyer (watcher.boil_autobuy, deploy/boil-autobuy.service;
+# user, 2026-11-11). Plain HTTP (WHMCS, no captcha), no browser. Woken by the
+# BOIL TG relay and boilcloud_sale like the FAC buyer; never polls on its own.
+# Buys ONE SeedNet (遠傳) annual plan: independent dynamic IP, not NAT /
+# static / blind box, today's total <= max_total, paid from the balance
+# (user tops up before the sale), then pauses itself. Expected around
+# Christmas (2027 = 羊年 plan). Hidden links: notify only, ordered once
+# public (TG post, or festive-offer listed in the shop menu).
+boil_autobuy:
+  enabled: true
+  max_total: 300
+  billing_cycle: annually
+  name_include: [seednet, seed net, 遠傳, 远传]
+  name_exclude: [nat, 靜態, 静态, static, 盲盒, lucky box, 福袋]
+  sale_groups: [festive-offer]
+  default_urls:
+    - https://cloud.boil.network/store/festive-offer
+  arm_minutes: 360
+  fast_poll_seconds: 20
+  fast_minutes: 30
+  slow_poll_seconds: 60
+  login_check_hours: 12
 
 suspicious_keywords:
   - test
@@ -240,14 +264,23 @@ providers:
   # on BOIL's channel. One request per round reads festive-offer (empty ->
   # listed alerts; its cards carry stock). Every 3rd round (15 min) the open
   # productsinfo feed probes 2 PIDs above the highest seen (528 on 11-11);
-  # a new PID is reported once with its prices (4 more requests). ~480
-  # requests/day. Notify only: these are hidden links, nothing orders them.
+  # a new PID is reported once with its prices (4 more requests). ~910
+  # requests/day with the Taiwan groups. Hidden links are notify only; an
+  # open group wakes boil_autobuy, which orders only once it is public.
   - name: boilcloud_sale
     type: boilcloud_sale
     enabled: true
     base_url: https://cloud.boil.network/
     categories: [festive-offer]
+    autobuy_trigger_dir: data/autobuy/boil_triggers
     interval_seconds: 300
+    # 2026-11-11: the 马年/蛇年 HiNet plans belong to the public A區 Taiwan
+    # group, so a SeedNet plan may be listed straight on a Taiwan page.
+    # Every 2nd round (10 min) the 3 public Taiwan groups are read and only
+    # SeedNet cards kept (+432 requests/day); a listed one is public.
+    watch_groups: [taiwan-shared-bandwidth, taiwan-b-shared-bandwidth, taiwan-d-shared-bandwidth]
+    watch_keywords: [seednet, seed net, 遠傳, 远传]
+    watch_every_rounds: 2
     feed_every_rounds: 3
     probe_ahead: 2
     feed_start_pid: 528
