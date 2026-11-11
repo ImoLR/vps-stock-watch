@@ -96,6 +96,22 @@ class FachostSaleProviderTest(unittest.TestCase):
         new_alert = next(c for c in changes if c.product.product_id == "50")
         self.assertIn("年付：$246,99", format_change(new_alert, []))
 
+    def test_notify_only_events_keeps_just_the_category_alert(self):
+        item = FachostSaleProvider(
+            {"name": "fachost_sale", "type": "fachost_sale", "request_spacing_seconds": 0,
+             "notify_only_events": ["sale_category"]}
+        )
+        with patch.object(item.session, "get", return_value=response(404, "Not found")):
+            closed = item.fetch_products()
+        checkout = "%s/seednet-vds-black-friday-2026/checkout" % URL
+        pages = [response(200, open_page()), response(200, PLANS, checkout)]
+        with patch.object(item.session, "get", side_effect=pages):
+            opened = item.fetch_products()
+        changes = compare_products(closed, opened)
+        alerted = {c.product.product_id for c in changes if item.should_notify(c)}
+        self.assertEqual(alerted, {"category:%s" % SLUG})
+        self.assertIn("50", {c.product.product_id for c in changes})
+
     def test_sold_out_keeps_known_plans(self):
         item = provider()
         checkout = "%s/seednet-vds-black-friday-2026/checkout" % URL

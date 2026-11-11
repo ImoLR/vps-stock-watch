@@ -128,6 +128,8 @@ BOIL 的节日款以往都在 TG 频道发链接：隐藏分组 `festive-offer` 
 2025 圣诞 HKT、2026 马年 HiNet），或隐藏 zone 分组里的新 PID（圣诞 zone38 777、
 婚礼 zone30/14）；周年庆加黑五在 11 月底（2024-11-27、2025-11-29）。
 
+**2026-11-11 起静音**（用户：有抢购程序就够了）：照常运行，只为唤醒抢购程序；`notify_only_events: [sale_category]` 只留活动分类开放/关闭这一条推送（隐藏链接的提前提醒），商品卡的库存、价格、新品等变化都不再推送，由抢购程序自己报告。
+
 1. `boilcloud_sale` Provider 每 300 秒请求一次 `https://cloud.boil.network/store/festive-offer`。
    - 分组本身记成伪商品 `category:festive-offer`：空分组（“不包含任何可見的產品”）为未开放，
      出现商品卡时推送“活动分类已开放”，并写明该分组是否已出现在商城侧栏菜单里（出现才算公开）。
@@ -190,6 +192,8 @@ Provider 代码、测试和下面的说明都保留；要恢复时改回 `enable
 付款周期选项。
 
 **FACHOST 活动监控（2026-11-07 起）**：分两部分。
+
+**2026-11-11 起静音**（用户：有抢购程序就够了）：照常运行，只为唤醒抢购程序；`notify_only_events: [sale_category]` 只留活动分类开放/关闭这一条推送（隐藏链接的提前提醒），商品卡的库存、价格、新品等变化都不再推送，由抢购程序自己报告。
 
 1. `fachost_sale` Provider 每 300 秒请求一次
    `https://fachost.cloud/products/special-regulations`。2025 黑五和 2026 一周年庆
@@ -395,6 +399,8 @@ IPLC 独服，以及日本、香港、洛杉矶、大陆独服。
 
 ### HighEndNetwork（HEN）
 
+**2026-11-11 起停用**：用户要求停掉 HighEnd 监控，`config.yaml` 里 `enabled: false`。代码、测试和下面的说明都保留；要恢复时改回 `enabled: true` 并重启。
+
 `billing.highendnetwork.com` 是 WHMCS 站点，套在 Cloudflare 后面。`/store/...` 和 `cart.php`
 对所有机房 IP 都返回 “Just a moment” 交互式 Turnstile 挑战（Playwright Chromium 自动点勾选框
 也会循环，换 HiNet 家宽出口也一样）。
@@ -437,6 +443,8 @@ Provider（`type: highend`），2026-11-06 用户定的规则：
 生产机是 Debian 11，跑不了 Camoufox。
 
 ### TCSCloud
+
+**2026-11-11 起停用**：用户要求停掉 TCSCloud 监控，`config.yaml` 里 `enabled: false`。代码、测试和下面的说明都保留；要恢复时改回 `enabled: true` 并重启。
 
 2026-11-06 接入。`https://billing.tcscloud.net/` 是 WHMCS 标准 `standard_cart` 模板，nginx 直出，
 **没有 Cloudflare / 挑战页**。只卖台北机房 VPS（HiNet / SeedNet / APTG 家宽动态/固定 IP，

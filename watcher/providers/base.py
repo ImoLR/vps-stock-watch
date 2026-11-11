@@ -79,6 +79,11 @@ class BaseProvider(ABC):
 
     def should_notify(self, change: Change) -> bool:
         """Return whether a recorded change should produce a Telegram notification."""
+        # notify_only_events: only changes on products whose catalog_event is
+        # listed alert (e.g. [sale_category]); [] silences the provider.
+        events = self.config.get("notify_only_events")
+        if events is not None and change.product.metadata.get("catalog_event") not in events:
+            return False
         return not bool(change.product.metadata.get("notification_suppressed", False))
 
     def get_text(self, url: str, allow_browser: bool = False) -> str:

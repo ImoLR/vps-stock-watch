@@ -274,6 +274,10 @@ providers:
     categories: [festive-offer]
     autobuy_trigger_dir: data/autobuy/boil_triggers
     interval_seconds: 300
+    # 2026-11-11 (user): kept only to wake the BOIL buyer. The one alert left
+    # is festive-offer opening or closing (the hidden-link heads-up); cards,
+    # Taiwan SeedNet stock and new feed PIDs are silent.
+    notify_only_events: [sale_category]
     # 2026-11-11: the 马年/蛇年 HiNet plans belong to the public A區 Taiwan
     # group, so a SeedNet plan may be listed straight on a Taiwan page.
     # Every 2nd round (10 min) the 3 public Taiwan groups are read and only
@@ -318,6 +322,10 @@ providers:
     categories: [special-regulations]
     interval_seconds: 300
     autobuy_trigger_dir: data/autobuy/fac_triggers
+    # 2026-11-11 (user): kept only to wake the FAC buyer. The one alert left
+    # is the sale page opening or closing (the hidden-link heads-up); item
+    # stock / price changes are silent, the buyer reports what it finds.
+    notify_only_events: [sale_category]
     timeout_seconds: 25
     request_spacing_seconds: 5
     max_backoff_seconds: 3600
@@ -413,9 +421,10 @@ providers:
   # = 8 requests. 5 s apart; ~3.3k/day. Seednet only (user, 2026-11-06
   # 22:50): every alert (new / removed / store-page moves / price / stock /
   # name) is limited to Seednet names; nothing else notifies.
+  # Disabled 2026-11-11 at the user's request; code kept.
   - name: highend
     type: highend
-    enabled: true
+    enabled: false
     base_url: https://billing.highendnetwork.com/
     currency_id: 1
     interval_seconds: 120
@@ -444,9 +453,10 @@ providers:
   # SeedNet only. ~1.5k requests/day: 2 categories every round (SeedNet card
   # stock + price every 5 min), feed probes every 2nd round (a new SeedNet PID
   # anywhere), hourly SeedNet feed prices and retired-SeedNet order pages.
+  # Disabled 2026-11-11 at the user's request; code kept.
   - name: tcscloud
     type: tcscloud
-    enabled: true
+    enabled: false
     base_url: https://billing.tcscloud.net/
     start_category: taiwan-vps-dynamic
     # SeedNet only lives in these two; Premium / ECO pages are not read.
