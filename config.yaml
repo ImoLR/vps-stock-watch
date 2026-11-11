@@ -52,7 +52,8 @@ fac_tg_watch:
   group_id: -1002306171240
   catch_up_seconds: 600
   admin_refresh_seconds: 3600
-  # Relayed posts with a FAC link or sale keyword also wake the auto-buyer.
+  # A FAC link from the channel or a group admin also wakes the auto-buyer;
+  # keyword-only posts are relayed but don't (user, 2026-11-11).
   autobuy_trigger_dir: data/autobuy/fac_triggers
   # 2026-11-10 (user): DMIT channels in the account's VPS公告群 folder, pushed
   # like the FAC channel. Only posts naming a watched special plan are sent;

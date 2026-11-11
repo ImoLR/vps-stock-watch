@@ -1,7 +1,8 @@
 """FACHOST (fachost.cloud) auto-buyer, driven by the existing FAC monitors.
 
-It does not watch the site by itself. The Telegram relay (a channel post or
-group message with a fachost link or a sale keyword) and the
+It does not watch the site by itself. The Telegram relay (a fachost link
+posted on the channel or by a group admin; sale keywords alone don't
+count) and the
 ``fachost_sale`` provider (special-regulations opened) drop trigger files
 (see ``fac_trigger``); each trigger "arms" its links for a few hours, and
 armed links are checked one page at a time until a matching product can be
@@ -217,7 +218,7 @@ def trigger_is_public(trigger: Dict[str, Any]) -> bool:
 def trigger_targets(trigger: Dict[str, Any], base_url: str, default_urls: Sequence[str]) -> List[str]:
     """The links to arm for one trigger."""
     targets: List[str] = []
-    fallback = bool(trigger.get("keyword_hit"))
+    fallback = False
     for url in trigger.get("urls") or []:
         kind, target = classify_url(str(url), base_url)
         if kind == "other":

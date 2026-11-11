@@ -113,14 +113,16 @@ class UrlTest(unittest.TestCase):
             trigger_targets({"urls": [product]}, BASE, DEFAULTS),
             [product + "/checkout"],
         )
-        # An announcement link or a keyword-only post arms the sale category.
+        # An announcement link arms the sale category.
         self.assertEqual(
             trigger_targets({"urls": ["https://fachost.cloud/announcements/9"]}, BASE, DEFAULTS),
             DEFAULTS,
         )
-        self.assertEqual(trigger_targets({"urls": [], "keyword_hit": True}, BASE, DEFAULTS), DEFAULTS)
-        both = trigger_targets({"urls": [product], "keyword_hit": True}, BASE, DEFAULTS)
-        self.assertEqual(both, [product + "/checkout"] + DEFAULTS)
+        # Old queue files may still carry keyword_hit; it no longer arms anything extra.
+        self.assertEqual(
+            trigger_targets({"urls": [product], "keyword_hit": True}, BASE, DEFAULTS),
+            [product + "/checkout"],
+        )
 
 
 class PublicTest(unittest.TestCase):
@@ -161,7 +163,7 @@ class TriggerQueueTest(unittest.TestCase):
             self.assertIsNone(post_trigger(tmp, "tg-channel", [], "hello"))
             self.assertIsNone(post_trigger(None, "tg-channel", ["https://fachost.cloud/"]))
             post_trigger(tmp, "tg-channel", ["https://fachost.cloud/products/x"], "黑五")
-            post_trigger(tmp, "tg-group", [], "年付", keyword_hit=True)
+            post_trigger(tmp, "tg-group", ["https://fachost.cloud/products/y"], "年付")
             stale = Path(tmp) / "0000000001.000000-old.json"
             stale.write_text(json.dumps({"source": "x", "urls": ["u"], "at": 1}), encoding="utf-8")
             items = take_triggers(tmp)
@@ -198,17 +200,19 @@ class TelegramHookTest(unittest.TestCase):
         watch.keywords = list(DEFAULT_KEYWORDS)
         return watch
 
-    def test_links_or_trusted_keywords_queue_a_trigger(self):
+    def test_only_trusted_links_queue_a_trigger(self):
         with tempfile.TemporaryDirectory() as tmp:
             watch = self.watch(tmp)
-            watch.trigger("tg-group", "看這個", ["https://fachost.cloud/products/a/b", "https://t.me/x"], False)
-            watch.trigger("tg-group", "黑五年付來了", [], False)  # not an admin: ignored
-            watch.trigger("tg-channel", "黑五年付 11/20 開賣", [], True)
-            watch.trigger("tg-channel", "例行維護通知", [], True)
+            product = "https://fachost.cloud/products/a/b"
+            watch.trigger("tg-group", "看這個", [product, "https://t.me/x"], False)  # member: ignored
+            watch.trigger("tg-group", "黑五年付來了", [], True)  # admin, keyword only: ignored
+            watch.trigger("tg-group", "黑五年付開賣", [product], True)
+            watch.trigger("tg-channel", "黑五年付 11/20 開賣", [], True)  # no link: ignored
+            watch.trigger("tg-channel", "開賣", ["https://fachost.cloud/announcements/3"], True)
             items = take_triggers(tmp)
             self.assertEqual(
-                [(i["source"], i["urls"], i["keyword_hit"]) for i in items],
-                [("tg-group", ["https://fachost.cloud/products/a/b"], False), ("tg-channel", [], True)],
+                [(i["source"], i["urls"]) for i in items],
+                [("tg-group", [product]), ("tg-channel", ["https://fachost.cloud/announcements/3"])],
             )
 
 

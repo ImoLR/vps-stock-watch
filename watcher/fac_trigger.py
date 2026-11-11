@@ -28,7 +28,6 @@ def post_trigger(
     source: str,
     urls: Iterable[str] = (),
     text: str = "",
-    keyword_hit: bool = False,
 ) -> Optional[Path]:
     """Queue one sighting. Never raises: the monitors must keep running."""
     if not directory:
@@ -37,10 +36,9 @@ def post_trigger(
         "source": source,
         "urls": [str(url) for url in urls],
         "text": (text or "")[:2000],
-        "keyword_hit": bool(keyword_hit),
         "at": time.time(),
     }
-    if not payload["urls"] and not keyword_hit:
+    if not payload["urls"]:
         return None
     try:
         path = Path(directory)

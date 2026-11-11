@@ -14,8 +14,10 @@ What is relayed:
 - group: messages with a fachost.cloud link (anyone), and messages from
   group admins (people, or bots named fac_*) that hit a sale keyword.
 
-Relayed messages with a FAC link or a sale keyword are also queued for the
-FAC auto-buyer (``autobuy_trigger_dir``; see watcher.fac_autobuy).
+Only a FAC link posted on the channel or by a group admin is also queued for
+the FAC auto-buyer (``autobuy_trigger_dir``; see watcher.fac_autobuy).
+Keyword-only messages are relayed but arm nothing (user, 2026-11-11: group
+chat hits sale words all the time; 20 s polling is too much for that).
 
 ``watch_channels`` (2026-11-10, user): other vendors' channels the account
 follows (DMIT). Only posts naming a watched plan are relayed, with their
@@ -258,12 +260,11 @@ class FacTelegramWatch:
             LOG.exception("relay notification failed")
 
     def trigger(self, source: str, text: str, urls: List[str], trusted: bool) -> None:
-        """Queue a sighting for the auto-buyer: FAC links, or a sale keyword
-        from the channel / a group admin."""
+        """Queue a sighting for the auto-buyer: a FAC link from the channel or
+        a group admin. Keywords alone, or links from other members, don't."""
         links = fac_links(urls)
-        keyword = trusted and matches_keyword(text, self.keywords)
-        if links or keyword:
-            post_trigger(self.trigger_dir, source, links, text, keyword_hit=keyword)
+        if trusted and links:
+            post_trigger(self.trigger_dir, source, links, text)
 
     def _channel_link(self, message_id: int) -> str:
         if self.channel_username:

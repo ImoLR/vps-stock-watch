@@ -180,6 +180,7 @@ Provider 代码、测试和下面的说明都保留；要恢复时改回 `enable
    - 频道：每条新帖都转发；改了文字的编辑也转发。
    - 群：转发含 `fachost.cloud` 链接的消息，以及群管理员（真人，或 `fac_*` 机器人）发的带活动
      关键词的消息；频道自动转发进群的帖子跳过。
+   - 唤醒抢购程序的只有频道帖或群管理员消息里的 FAC 链接；只有关键词、或普通群友发的链接只转发。
    - 只读：不发言、不点按钮、不标已读。
    - 会话文件、`user.env`（api_id/api_hash/手机号）、`login.py`、`relay_state.json` 都在
      `data/tg/`（0600，不进 git）。
@@ -770,11 +771,12 @@ systemd-run --unit nexkr-autobuy --working-directory "$PWD" \
 
 `watcher.fac_autobuy`（`deploy/fac-autobuy.service`）自己不轮询网站，靠上面两路 FAC 监控唤醒：
 
-- `fac_tg_watch` 转发的消息里有 FAC 链接，或频道/群管理员的消息带活动关键词，就往
-  `data/autobuy/fac_triggers/` 写一个触发文件；`fachost_sale` 发现 `special-regulations`
+- `fac_tg_watch` 转发的消息里，**频道帖或群管理员发的消息带 FAC 链接**，才往
+  `data/autobuy/fac_triggers/` 写一个触发文件（2026-11-11 用户要求：只有关键词没链接的消息、
+  普通群友发的链接只转发通知，不唤醒抢购——群里平常聊天常碰到活动词，20 秒太密）；`fachost_sale` 发现 `special-regulations`
   能打开时也写一个。
 - 抢购程序取走触发文件，把里面的链接“武装” 6 小时：前 30 分钟每 20 秒查一次，之后每 60 秒
-  （TG `/autobuy` 里改的间隔优先）。公告页、首页这类不是商品的链接，或只有关键词没链接的帖子，
+  （TG `/autobuy` 里改的间隔优先）。公告页、首页这类不是商品的 FAC 链接，
   武装 `special-regulations`。没有武装的链接时不开浏览器，只每 6 小时检查一次登录。
 - **不买还没公开的隐藏链接**（用户要求）：链接在 TG（频道或群）发出来就算公开；只被网站监控
   看到的页面（比如 `special-regulations` 从 404 变成能打开），要等它出现在商城菜单里才算公开，
