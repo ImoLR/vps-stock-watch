@@ -123,6 +123,28 @@ customized-productst、residential-proxy、hong-kong-dedicated-diy、taiwan-c �
 hong-kong-zone1–49。`feeds/productsinfo.php?pid=N&get=name` 公开可用（隐藏商品也返回名称，
 不存在返回 `Product ID Not Found`），当时最大 PID 为 528。
 
+**BOILCLOUD 活动监控（2026-11-11 起，对齐 FACHOST 那一套）**：全目录扫描仍停用，改为两部分。
+BOIL 的节日款以往都在 TG 频道发链接：隐藏分组 `festive-offer` 里的商品（2025 618/国庆盲盒、
+2025 圣诞 HKT、2026 马年 HiNet），或隐藏 zone 分组里的新 PID（圣诞 zone38 777、
+婚礼 zone30/14）；周年庆加黑五在 11 月底（2024-11-27、2025-11-29）。
+
+1. `boilcloud_sale` Provider 每 300 秒请求一次 `https://cloud.boil.network/store/festive-offer`。
+   - 分组本身记成伪商品 `category:festive-offer`：空分组（“不包含任何可見的產品”）为未开放，
+     出现商品卡时推送“活动分类已开放”，并写明该分组是否已出现在商城侧栏菜单里（出现才算公开）。
+   - 分组里的每张商品卡（真实 PID、价格、付款周期、`N 可用` 库存）都当商品监控；补货、售罄、
+     库存、价格全部通知，不套用旧 Provider 的 SeedNet/年付过滤。
+   - 每 3 轮（15 分钟）用公开的 `feeds/productsinfo.php` 探测最高 PID 之上的 2 个 PID（起点
+     `feed_start_pid: 528`）；新 PID 记成 `pid:<N>`，读一次 4 个付款周期价格，按“隐藏新品”推送一次。
+   - 每个请求间隔 5 秒；403/429/challenge 不重试，直接走失败退避。平时每天约 480 个请求。
+   - 只通知：没有 BOIL 抢购程序，隐藏链接不会被下单。
+2. TG 转发并入 `watcher.fac_tg_watch`（同一个 TG 会话、同一个服务），配置在
+   `fac_tg_watch.relays`：公告频道 `@BoilsHomelabChannel`（每条都转发，含维护通知）和聊天群
+   「Boil不是Boli的家裡雲」`@BoilsHomelab`（含 `cloud.boil.network` 链接的消息，或 BOIL 官方账号
+   发的带活动关键词的消息）。这个群一天约 800 条消息，有 44 个社区管理员和机器人
+   （2026-11-11 读最近 4000 条：普通群友 0 条商城链接，管理员关键词命中 8 条，全是闲聊和机器人日报），
+   所以“管理员”只算 `staff_usernames`：@zby88zby（Boil）、@BoilCloud、客服 @McDonalds_Boil、
+   @mafumafu_i。BOIL 的转发不唤醒任何抢购程序。
+
 BOILCLOUD 当前使用 WHMCS 服务端商城 HTML，不使用 Playwright。普通 HTTP 请求就能在
 `div.tt-single-product[id^="product"]` 商品卡片中取得真实 PID、名称、价格、付款周期、
 整数库存、规格和商品链接。浏览器 Network 验证只看到语言包 JSON 和统计请求，没有
@@ -182,6 +204,8 @@ Provider 代码、测试和下面的说明都保留；要恢复时改回 `enable
      关键词的消息；频道自动转发进群的帖子跳过。
    - 唤醒抢购程序的只有频道帖或群管理员消息里的 FAC 链接；只有关键词、或普通群友发的链接只转发。
    - 只读：不发言、不点按钮、不标已读。
+   - 其他商家按同样规则转发时加在 `relays` 里（2026-11-11 起有 BOIL，见 BOILCLOUD 一节）。
+     FAC 的进度仍存在 `relay_state.json` 顶层，其他商家存在 `relays.<名称>` 下。
    - 会话文件、`user.env`（api_id/api_hash/手机号）、`login.py`、`relay_state.json` 都在
      `data/tg/`（0600，不进 git）。
    - 登录失效时推送“登录已失效”并以退出码 3 停止，systemd 不会无限重启。重新登录：

@@ -636,10 +636,16 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
             "<b>%s</b>" % html.escape(heading),
             "",
             "分类：%s" % html.escape(product.name),
-            "状态：%s" % ("已开放" if is_open else "未开放（404）"),
+            "状态：%s"
+            % ("已开放" if is_open else "未开放（%s）" % product.metadata.get("closed_label", "404")),
         ]
         if is_open and product.metadata.get("product_count") is not None:
             lines.append("商品数：%s" % product.metadata["product_count"])
+        listed = product.metadata.get("listed_in_menu")
+        if is_open and isinstance(listed, bool):
+            lines.append(
+                "商城菜单：%s" % ("已列出（公开）" if listed else "未列出（隐藏分组，等频道公布）")
+            )
         if product.url:
             lines.extend(["", '<a href="%s">打开活动分类</a>' % html.escape(product.url, quote=True)])
         return "\n".join(lines)
@@ -1142,6 +1148,7 @@ def _provider_name(value: str) -> str:
         "dmitnews": "DMIT 频道",
         "blossom": "Blossom Host",
         "boilcloud": "BOILCLOUD",
+        "boilcloud_sale": "BOILCLOUD 活动",
         "cloudiplc": "CloudIPLC",
         "fachost": "FACHOST",
         "fachost_sale": "FACHOST 活动",

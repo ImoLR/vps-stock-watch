@@ -55,6 +55,25 @@ fac_tg_watch:
   # A FAC link from the channel or a group admin also wakes the auto-buyer;
   # keyword-only posts are relayed but don't (user, 2026-11-11).
   autobuy_trigger_dir: data/autobuy/fac_triggers
+  # 2026-11-11 (user): BOIL relayed the same way as FAC: every channel post;
+  # group messages with a cloud.boil.network link, or a sale-word post from
+  # BOIL's own accounts (the group has ~44 community admins and bots, so
+  # "admin" is narrowed to staff_usernames). No BOIL auto-buyer: nothing is
+  # queued, and hidden links stay notify-only.
+  relays:
+    - name: BOIL
+      channel_id: -1002036810571  # Boil の家裡雲「維護日記」 @BoilsHomelabChannel
+      channel_username: BoilsHomelabChannel
+      group_id: -1002302355078  # Boil不是Boli的家裡雲 @BoilsHomelab
+      link_hosts: [cloud.boil.network]
+      # Boil, the shop account and the two support accounts the channel names.
+      staff_usernames: [zby88zby, BoilCloud, McDonalds_Boil, mafumafu_i]
+      keywords: [
+        黑五, black friday, 雙11, 双11, 雙十一, 双十一, 雙12, 双12, 雙十二, 双十二,
+        年付, 年繳, 年缴, festive, 節日, 节日, 盲盒, 聖誕, 圣诞, 週年, 周年,
+        優惠碼, 优惠码, 折扣碼, 折扣码, 上架, 上新, 補貨, 补货, 限時, 限时, 限量,
+        活動, 活动, 開賣, 开卖, 下單鏈接, 下单链接,
+      ]
   # 2026-11-10 (user): DMIT channels in the account's VPS公告群 folder, pushed
   # like the FAC channel. Only posts naming a watched special plan are sent;
   # act.dmithost.net short links are resolved to PIDs (one request each).
@@ -199,8 +218,9 @@ providers:
     timeout_seconds: 25
     max_backoff_seconds: 1800
 
-  # Disabled 2026-11-07 at the user's request; the monitor will be redesigned
-  # (hidden holiday group gid 44 store/festive-offer). Code kept.
+  # Full catalog scan, disabled 2026-11-07 at the user's request; replaced by
+  # boilcloud_sale below plus the BOIL Telegram relay (fac_tg_watch.relays).
+  # Code kept.
   - name: boilcloud
     type: boilcloud
     enabled: false
@@ -213,6 +233,28 @@ providers:
     retry_backoff_seconds: 1
     max_categories: 100
     max_backoff_seconds: 1800
+
+  # BOILCLOUD sale watch (user, 2026-11-11, aligned with fachost_sale). Holiday
+  # items are sold from the hidden group gid 44 store/festive-offer (empty
+  # between sales) or as new PIDs in hidden zone groups; the links are posted
+  # on BOIL's channel. One request per round reads festive-offer (empty ->
+  # listed alerts; its cards carry stock). Every 3rd round (15 min) the open
+  # productsinfo feed probes 2 PIDs above the highest seen (528 on 11-11);
+  # a new PID is reported once with its prices (4 more requests). ~480
+  # requests/day. Notify only: these are hidden links, nothing orders them.
+  - name: boilcloud_sale
+    type: boilcloud_sale
+    enabled: true
+    base_url: https://cloud.boil.network/
+    categories: [festive-offer]
+    interval_seconds: 300
+    feed_every_rounds: 3
+    probe_ahead: 2
+    feed_start_pid: 528
+    currency_id: 1
+    timeout_seconds: 25
+    request_spacing_seconds: 5
+    max_backoff_seconds: 3600
 
   # Disabled 2026-11-07 at the user's request: sale items are hidden links
   # posted in FACHOST's Telegram group, not on the store pages. Code kept.
