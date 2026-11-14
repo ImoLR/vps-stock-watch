@@ -621,6 +621,37 @@ def format_channel_post(
     return "\n".join(lines)
 
 
+def _format_lowest_tier(provider: str, product: Product) -> str:
+    """The cheapest plan of a watched region + routing profile changed."""
+    meta = product.metadata
+    old, new = meta.get("old_tier"), meta.get("new_tier")
+
+    def tier(value: Optional[Dict[str, Any]], missing: str) -> str:
+        if not value:
+            return missing
+        state = value.get("available")
+        return "%s %s%s" % (
+            html.escape(str(value.get("name"))),
+            html.escape(str(value.get("price") or "")),
+            "" if state is None else "（%s）" % ("有货" if state else "无货"),
+        )
+
+    if not old:
+        heading = "🆕 %s 监控地区新增线路" % provider
+    elif not new:
+        heading = "🗑 %s 监控地区的线路没了" % provider
+    else:
+        heading = "🔁 %s 最低档换了机型" % provider
+    lines = ["<b>%s</b>" % html.escape(heading), ""]
+    _append(lines, "地区", product.region)
+    _append(lines, "线路", meta.get("routing_profile"))
+    lines.append("原最低档：%s" % tier(old, "（没有这条线路）"))
+    lines.append("现最低档：%s" % tier(new, "（这条线路已没有机型）"))
+    if new and product.url:
+        lines.extend(["", '<a href="%s">打开购买页</a>' % html.escape(product.url, quote=True)])
+    return "\n".join(lines)
+
+
 def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
     product, old = change.product, change.old
     provider = _provider_name(product.provider)
@@ -667,6 +698,8 @@ def format_change(change: Change, suspicious_keywords: Iterable[str]) -> str:
                 "Region ID：%s" % html.escape(product.product_id),
             ]
         )
+    if product.metadata.get("catalog_event") == "lowest_tier":
+        return _format_lowest_tier(provider, product)
     headings = {
         ChangeType.NEW: "🆕 %s 发现新品" % provider,
         ChangeType.RESTOCK: "🔥 %s 补货" % provider,
@@ -865,10 +898,21 @@ def format_status(
             lines.extend(
                 [
                     "重点地区：%s" % html.escape(" / ".join(stats.get("focus_regions", []))),
-                    "重点商品：%s" % stats.get("focused_products", 0),
+                    "重点商品：%s%s"
+                    % (
+                        stats.get("focused_products", 0),
+                        "（每个地区每条线路最便宜的一档）"
+                        if stats.get("lowest_tier_only")
+                        else "",
+                    ),
                     "当前有货：%s" % stats.get("focused_available", 0),
                     "全球地区：%s" % stats.get("global_regions", 0),
-                    "全球 Catalog 商品：%s" % stats.get("global_products", 0),
+                    (
+                        "已扫描：%s 个地区 / %s 个商品（只扫重点地区）"
+                        % (stats.get("scanned_regions", 0), stats.get("global_products", 0))
+                        if stats.get("focus_regions_only")
+                        else "全球 Catalog 商品：%s" % stats.get("global_products", 0)
+                    ),
                 ]
             )
             if isinstance(route_state, dict):

@@ -352,6 +352,200 @@ class MisakaLifecycleTests(unittest.TestCase):
         self.assertEqual(self.app.provider_interval("misaka"), 60)
 
 
+class MisakaLowestTierTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.app = WatcherApp(
+            {
+                "state_path": str(Path(self.directory.name) / "state.json"),
+                "poll_interval_seconds": 60,
+                "providers": [
+                    {
+                        "name": "misaka",
+                        "type": "misaka",
+                        "interval_seconds": 60,
+                        "lowest_tier_only": True,
+                        "focus_regions": ["HKG12", "LAX02"],
+                        "focus_region_labels": {
+                            "HKG12": "Hong Kong",
+                            "LAX02": "Los Angeles",
+                        },
+                        "minimum_regions": 1,
+                        "minimum_global_products": 1,
+                    }
+                ],
+            },
+            notifications=False,
+        )
+        self.app.telegram = FakeTelegram()
+        self.provider = self.app.providers[0]
+        self.regions = [
+            region("HKG12", "HK", "Hong Kong"),
+            region("LAX02", "US", "Los Angeles"),
+            region("IAD01", "US", "Ashburn"),
+        ]
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def run_scan(self, plans):
+        def get(url):
+            if url.endswith("/regions"):
+                return self.regions
+            slug = url.split("/regions/", 1)[1].split("/", 1)[0]
+            return plans[slug]
+
+        self.provider._get_json = get
+        self.assertTrue(self.app.check(self.provider))
+        return self.app.store.provider("misaka")
+
+    @staticmethod
+    def hk_plans(small_available=False, plus_available=False):
+        return [
+            plan(1, name="S3N-1C2G", monthly=20.0, vcores=1, memory=2048),
+            plan(2, name="S3N-1C1G", monthly=10.0, available=small_available),
+            plan(
+                3,
+                name="S3P2-1C1G",
+                monthly=21.0,
+                available=plus_available,
+                routing_profile="Premium Plus",
+            ),
+            plan(4, name="S3P2-1C2G", monthly=42.0, routing_profile="Premium Plus"),
+        ]
+
+    def plans(self, **hk):
+        return {
+            "HKG12": self.hk_plans(**hk),
+            "LAX02": [plan(10, name="S3N-1C1G", monthly=6.0, available=False)],
+            "IAD01": [plan(20, name="S3N-1C1G", monthly=6.0, available=False)],
+        }
+
+    def test_only_cheapest_plan_per_line_keeps_stock(self):
+        entry = self.run_scan(self.plans())
+        products = entry["products"]
+        self.assertFalse(products["misaka:HKG12:2"]["available"])
+        self.assertFalse(products["misaka:HKG12:3"]["available"])
+        self.assertFalse(products["misaka:LAX02:10"]["available"])
+        for key in ("misaka:HKG12:1", "misaka:HKG12:4", "misaka:IAD01:20"):
+            self.assertIsNone(products[key]["available"])
+            self.assertTrue(products[key]["metadata"]["catalog_only"])
+        self.assertEqual(
+            sorted(entry["lowest_tiers"]),
+            ["HKG12:Premium", "HKG12:Premium Plus", "LAX02:Premium"],
+        )
+        self.assertEqual(entry["catalog_stats"]["focused_products"], 3)
+        self.assertEqual(self.app.telegram.sent, [])
+
+    def test_cheapest_plan_restock_alerts_but_bigger_plans_stay_silent(self):
+        self.run_scan(self.plans())
+        plans = self.plans(small_available=True)
+        plans["HKG12"][0]["available"] = False
+        self.run_scan(plans)
+        self.assertEqual(len(self.app.telegram.sent), 1)
+        text = self.app.telegram.sent[0][0]
+        self.assertIn("🔥 Misaka 补货", text)
+        self.assertIn("S3N-1C1G", text)
+        self.assertIn("HKG12", text)
+
+    def test_cheapest_plan_switch_alerts_once(self):
+        self.run_scan(self.plans())
+        plans = self.plans()
+        plans["HKG12"] = [item for item in plans["HKG12"] if item["id"] != 2]
+        self.run_scan(plans)
+        texts = [text for text, _ in self.app.telegram.sent]
+        switch = [text for text in texts if "最低档换了机型" in text]
+        self.assertEqual(len(switch), 1)
+        self.assertIn("原最低档：S3N-1C1G $10.00 USD（无货）", switch[0])
+        self.assertIn("现最低档：S3N-1C2G $20.00 USD（有货）", switch[0])
+        self.assertIn("线路：Premium", switch[0])
+        self.assertTrue(any("商品下架" in text for text in texts))
+        self.app.telegram.sent = []
+        self.run_scan(plans)
+        self.assertEqual(self.app.telegram.sent, [])
+
+    def test_switching_on_the_mode_is_silent(self):
+        self.run_scan(self.plans())
+        entry = self.app.store.provider("misaka")
+        entry.pop("lowest_tiers")
+        self.run_scan(self.plans())
+        self.assertEqual(self.app.telegram.sent, [])
+        self.assertIn("lowest_tiers", self.app.store.provider("misaka"))
+
+    def test_missing_focus_slug_fails_the_scan(self):
+        self.regions = [region("HKG12", "HK", "Hong Kong")]
+        self.provider._get_json = lambda url: (
+            self.regions if url.endswith("/regions") else self.hk_plans()
+        )
+        with self.assertRaises(ParseError):
+            self.provider.fetch_products()
+
+    def test_status_names_the_lowest_tier_mode(self):
+        self.run_scan(self.plans())
+        status = format_status(self.app.store.snapshot(), {"misaka": 60})
+        self.assertIn("重点地区：HKG12 / LAX02", status)
+        self.assertIn("重点商品：3（每个地区每条线路最便宜的一档）", status)
+
+
+class MisakaFocusOnlyTests(MisakaLowestTierTests):
+    def setUp(self):
+        super().setUp()
+        self.provider.config["focus_regions_only"] = True
+        self.provider.focus_regions_only = True
+        self.fetched = []
+
+    def run_scan(self, plans):
+        def get(url):
+            self.fetched.append(url)
+            if url.endswith("/regions"):
+                return self.regions
+            slug = url.split("/regions/", 1)[1].split("/", 1)[0]
+            return plans[slug]
+
+        self.provider._get_json = get
+        self.assertTrue(self.app.check(self.provider))
+        return self.app.store.provider("misaka")
+
+    def test_only_cheapest_plan_per_line_keeps_stock(self):
+        entry = self.run_scan(self.plans())
+        self.assertNotIn("misaka:IAD01:20", entry["products"])
+        self.assertFalse(any("IAD01" in url for url in self.fetched))
+        self.assertEqual(len(self.fetched), 3)
+        self.assertEqual(entry["catalog_stats"]["scanned_regions"], 2)
+        self.assertIsNone(entry["products"]["misaka:HKG12:1"]["available"])
+        self.assertFalse(entry["products"]["misaka:HKG12:2"]["available"])
+
+    def test_new_region_and_bigger_new_plan_stay_silent(self):
+        self.run_scan(self.plans())
+        self.regions.append(region("SYD01", "AU", "Sydney"))
+        plans = self.plans()
+        plans["HKG12"].append(plan(5, name="S3N-2C4G", monthly=40.0))
+        self.run_scan(plans)
+        self.assertEqual(self.app.telegram.sent, [])
+
+    def test_cheapest_plan_price_change_alerts(self):
+        self.run_scan(self.plans())
+        plans = self.plans()
+        plans["LAX02"][0]["price_monthly"] = 7.0
+        self.run_scan(plans)
+        self.assertEqual(len(self.app.telegram.sent), 1)
+        self.assertIn("💰 Misaka 价格变化", self.app.telegram.sent[0][0])
+
+    def test_switch_from_full_catalog_is_silent(self):
+        self.provider.focus_regions_only = False
+        self.run_scan(self.plans())
+        self.provider.focus_regions_only = True
+        entry = self.run_scan(self.plans())
+        self.assertNotIn("misaka:IAD01:20", entry["products"])
+        self.assertEqual(self.app.telegram.sent, [])
+
+    def test_status_names_the_lowest_tier_mode(self):
+        self.run_scan(self.plans())
+        status = format_status(self.app.store.snapshot(), {"misaka": 60})
+        self.assertIn("已扫描：2 个地区 / 5 个商品（只扫重点地区）", status)
+        self.assertIn("重点商品：3（每个地区每条线路最便宜的一档）", status)
+
+
 class MisakaDiffTests(unittest.TestCase):
     @staticmethod
     def item(**values):

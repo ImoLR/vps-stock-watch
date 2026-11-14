@@ -535,6 +535,17 @@ JSON 接口，不抓取渲染后的 UI，也不需要 Chromium。地区使用 AP
 `catalog_only=true` 和 `available=null`，所以不会产生补货、售罄、库存、价格、折扣或下架
 通知，也不会出现在 `/stock`。港台日的 `available=false` Plan 绝不丢弃。
 
+2026-11-14 起（用户要求）`focus_regions` 改为地区 slug
+`[HKG12, NRT04, TPE01, SIN03, LAX02, SEA02]`（条目也可以写国家代码），并开启
+`lowest_tier_only: true`：每个重点地区按 `routing_profile`（Premium / Premium Plus）分组，
+只有每组月付最便宜的一档保留库存并推送补货、售罄、改价；同地区其它 Plan 降为
+catalog-only。每组当前最低档存在 state 的 `lowest_tiers`，最低档换成别的 Plan、地区
+新增或失去一条线路时推送一次“最低档换了机型”；首次开启只建 baseline，不推送。
+配置里的 slug 找不到时整轮扫描报错（不会悄悄漏监控）。同日用户又要求
+`focus_regions_only: true`：只拉地区列表和这 6 个地区的 Plan（每轮 7 个请求），其它地区
+不再记录，新地区、非最低档新品都不推送；间隔改为 1800 秒（约 340 请求/天，比原来全目录
+每 2 小时约 520 还少）。
+
 2026-09-29 实测为 42 个地区、361 个地区 Plan；港台日共 50 个 Plan，其中 37 个有货、
 13 个无货。API 当前只提供 `available` 与 `unavailable_reason=out_of_stock`，没有具体库存
 数字，因此 `stock=null`。价格字段为 `price_monthly`、`price_semiannual` 和
@@ -685,7 +696,7 @@ PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" \
 
 **请求量原则（2026-10-22）：** 每轮只发 1 个请求的商家（NexKr、NewNB、DMIT、Blossom）
 保持 60 秒；每轮要翻多页的商家放慢到每天约 2 千请求以内（BOILCLOUD、
-LeiKwanHost 600 秒，FACHOST 300 秒，Misaka 库存与 Route Watch 均 7200 秒，VMSILO 下单页计价缓存 1800 秒）。
+LeiKwanHost 600 秒，FACHOST 300 秒，Misaka 库存 1800 秒（只扫 6 个地区）、Route Watch 7200 秒，VMSILO 下单页计价缓存 1800 秒）。
 新增商家或改间隔时先算“每轮请求数 × 每天轮数”。Misaka 曾以每天约 6 万请求运行，
 之后被 Vercel 防火墙拒绝。
 

@@ -507,20 +507,33 @@ providers:
     enabled: true
     api_base: https://api.misaka.io/mc2
     buy_base: https://app.misaka.io/iaas/vm/create
+    # Since 2026-11-14 (user): alerts only for the cheapest plan of each line
+    # (routing profile) in these regions (slugs): stock, price, name, removal,
+    # and the cheapest plan changing. Only these regions are fetched (1 region
+    # list + 6 plan lists = 7 requests); no new-region / new-plan alerts.
+    lowest_tier_only: true
+    focus_regions_only: true
     focus_regions:
-      - HK
-      - TW
-      - JP
+      - HKG12
+      - NRT04
+      - TPE01
+      - SIN03
+      - LAX02
+      - SEA02
     focus_region_labels:
-      HK: Hong Kong
-      TW: Taiwan
-      JP: Japan
-    interval_seconds: 7200
+      HKG12: Hong Kong
+      NRT04: Japan
+      TPE01: Taiwan
+      SIN03: Singapore
+      LAX02: Los Angeles
+      SEA02: Seattle
+    # 30 min x 7 requests = about 340 requests/day (user, 2026-11-14).
+    interval_seconds: 1800
     timeout_seconds: 20
     retry_attempts: 2
     retry_backoff_seconds: 0.5
     minimum_regions: 30
-    minimum_global_products: 250
+    minimum_global_products: 50
     max_regions: 100
     minimum_region_retention_ratio: 0.8
     minimum_product_retention_ratio: 0.7

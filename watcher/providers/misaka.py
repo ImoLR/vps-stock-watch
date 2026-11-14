@@ -13,7 +13,14 @@ from .base import BaseProvider, FetchError, ParseError, is_challenge_page
 
 
 class MisakaProvider(BaseProvider):
-    """Monitor Misaka's global catalog and focused APAC inventory."""
+    """Monitor Misaka's global catalog and focused APAC inventory.
+
+    focus_regions entries match a region slug (LAX02) or a country code (HK).
+    With lowest_tier_only, only the cheapest plan of each routing profile in a
+    focus region keeps stock; the other plans there are catalog-only too.
+    With focus_regions_only, plans are fetched for the focus regions only and
+    new regions / new non-watched plans no longer alert.
+    """
 
     API_BASE = "https://api.misaka.io/mc2"
     BUY_BASE = "https://app.misaka.io/iaas/vm/create"
@@ -35,8 +42,11 @@ class MisakaProvider(BaseProvider):
             if isinstance(labels, dict)
             else {}
         )
+        self.lowest_tier_only = bool(config.get("lowest_tier_only", False))
+        self.focus_regions_only = bool(config.get("focus_regions_only", False))
         self.last_scan_stats: Dict[str, Any] = {}
         self._catalog_regions: Dict[str, Dict[str, Any]] = {}
+        self._lowest_tiers: Dict[str, Dict[str, Any]] = {}
         self._request_count = 0
 
     def fetch_products(self) -> List[Product]:
@@ -62,15 +72,20 @@ class MisakaProvider(BaseProvider):
         products: List[Product] = []
         focus_seen: Set[str] = set()
         region_plan_counts: Dict[str, int] = {}
+        self._lowest_tiers = {}
+        scanned = 0
         for region in regions:
+            if self.focus_regions_only and self._focus_entry(region) is None:
+                continue
+            scanned += 1
             slug = region["slug"]
             plans_payload = self._get_json(
                 "%s/regions/%s/plans" % (api_base, quote(slug, safe="-._~"))
             )
             plans = self._parse_plans(plans_payload, region)
             region_plan_counts[slug] = len(plans)
-            if region["country_code"] in self.focus_regions:
-                focus_seen.add(region["country_code"])
+            if self._focus_entry(region) is not None:
+                focus_seen.add(self._focus_entry(region))
                 if not plans:
                     raise ParseError(
                         "Misaka focus region %s returned an empty plan catalog" % slug
@@ -80,7 +95,7 @@ class MisakaProvider(BaseProvider):
         missing_focus = set(self.focus_regions) - focus_seen
         if missing_focus:
             raise ParseError(
-                "Misaka catalog is missing focus country codes: %s"
+                "Misaka catalog is missing focus regions: %s"
                 % ", ".join(sorted(missing_focus))
             )
         minimum_products = max(1, int(self.config.get("minimum_global_products", 1)))
@@ -94,6 +109,9 @@ class MisakaProvider(BaseProvider):
         duration = time.monotonic() - started
         self.last_scan_stats = {
             "focus_regions": list(self.focus_regions),
+            "lowest_tier_only": self.lowest_tier_only,
+            "focus_regions_only": self.focus_regions_only,
+            "scanned_regions": scanned,
             "focused_products": len(focused),
             "focused_available": sum(item.available is True for item in focused),
             "focused_unavailable": sum(item.available is False for item in focused),
@@ -122,6 +140,11 @@ class MisakaProvider(BaseProvider):
                 int(stats["global_regions"]),
                 float(self.config.get("minimum_region_retention_ratio", 0.8)),
             )
+        # Switching between the full catalog and focus-only scans changes the
+        # plan count on purpose; only compare scans of the same scope.
+        if isinstance(previous_stats, dict) and bool(
+            previous_stats.get("focus_regions_only")
+        ) == self.focus_regions_only:
             self._reject_large_drop(
                 "plans",
                 int(previous_stats.get("global_products", 0)),
@@ -151,7 +174,11 @@ class MisakaProvider(BaseProvider):
         old_regions = previous_state.get("catalog_regions", {})
         if not isinstance(old_regions, dict):
             old_regions = {}
-        changes: List[Change] = []
+        changes: List[Change] = self._lowest_tier_changes(
+            previous_state.get("lowest_tiers")
+        )
+        if self.focus_regions_only:
+            return changes
         for region_id in sorted(set(self._catalog_regions) - set(old_regions)):
             region = self._catalog_regions[region_id]
             changes.append(
@@ -177,12 +204,52 @@ class MisakaProvider(BaseProvider):
     ) -> None:
         provider_state["catalog_regions"] = dict(self._catalog_regions)
         provider_state["catalog_stats"] = dict(self.last_scan_stats)
+        if self.lowest_tier_only:
+            provider_state["lowest_tiers"] = dict(self._lowest_tiers)
+        else:
+            provider_state.pop("lowest_tiers", None)
+
+    def _lowest_tier_changes(self, old_tiers: Any) -> List[Change]:
+        # No saved tiers yet (first scan, or the mode was just switched on):
+        # take the current picks as the baseline without alerting.
+        if not self.lowest_tier_only or not isinstance(old_tiers, dict):
+            return []
+        changes: List[Change] = []
+        for group in sorted(set(old_tiers) | set(self._lowest_tiers)):
+            old = old_tiers.get(group)
+            new = self._lowest_tiers.get(group)
+            if (old or {}).get("plan_key") == (new or {}).get("plan_key"):
+                continue
+            shown = new or old
+            changes.append(
+                Change(
+                    ChangeType.DETAILS,
+                    Product(
+                        provider=self.name,
+                        product_id="lowest:%s" % group,
+                        name=shown.get("name") or group,
+                        category=shown.get("region_label"),
+                        region=shown.get("region"),
+                        url=shown.get("url"),
+                        metadata={
+                            "catalog_event": "lowest_tier",
+                            "routing_profile": shown.get("routing_profile"),
+                            "old_tier": old,
+                            "new_tier": new,
+                        },
+                    ),
+                    fields=["lowest_tier"],
+                )
+            )
+        return changes
 
     def should_notify(self, change: Change) -> bool:
         if change.product.metadata.get("catalog_event") == "region":
             return change.type == ChangeType.NEW
+        if change.product.metadata.get("catalog_event") == "lowest_tier":
+            return True
         if change.product.metadata.get("catalog_only"):
-            return change.type == ChangeType.NEW
+            return change.type == ChangeType.NEW and not self.focus_regions_only
         return super().should_notify(change)
 
     def _parse_regions(self, payload: Any) -> List[Dict[str, Any]]:
@@ -233,8 +300,9 @@ class MisakaProvider(BaseProvider):
                 "Misaka plans response for %s is not a list" % region["slug"]
             )
         products: List[Product] = []
+        ranks: List[Tuple[float, float, float, str]] = []
         seen: Set[str] = set()
-        focused = region["country_code"] in self.focus_regions
+        focused = self._focus_entry(region) is not None
         for index, value in enumerate(payload):
             if not isinstance(value, dict):
                 raise ParseError(
@@ -309,7 +377,7 @@ class MisakaProvider(BaseProvider):
                         "routing_profile": value.get("routing_profile"),
                         "network_billing_model": value.get("network_billing_model"),
                         "tags": value.get("tags") if isinstance(value.get("tags"), list) else [],
-                        "sort_order": self._focus_sort_order(region["country_code"]),
+                        "sort_order": self._focus_sort_order(region),
                     },
                     pricing=pricing,
                     original_price=self._money(value.get("original_price_monthly")),
@@ -321,7 +389,55 @@ class MisakaProvider(BaseProvider):
                     promotion=self._promotion(value.get("promotion")),
                 )
             )
+            monthly = value.get("sale_price_monthly")
+            if not isinstance(monthly, (int, float)) or isinstance(monthly, bool):
+                monthly = value["price_monthly"]
+            ranks.append(
+                (
+                    float(monthly),
+                    float(value.get("vcores") or 0),
+                    float(value.get("memory") or 0),
+                    plan_id,
+                )
+            )
+        if focused and self.lowest_tier_only:
+            self._keep_lowest_tiers(products, ranks, region)
         return products
+
+    def _keep_lowest_tiers(
+        self,
+        products: List[Product],
+        ranks: List[Tuple[float, float, float, str]],
+        region: Dict[str, Any],
+    ) -> None:
+        """Keep stock only on the cheapest plan of each routing profile."""
+        cheapest: Dict[str, int] = {}
+        for index, product in enumerate(products):
+            profile = str(product.metadata.get("routing_profile") or "-")
+            best = cheapest.get(profile)
+            if best is None or ranks[index] < ranks[best]:
+                cheapest[profile] = index
+        keep = set(cheapest.values())
+        for index, product in enumerate(products):
+            product.metadata["lowest_tier"] = index in keep
+            if index in keep:
+                continue
+            product.available = None
+            product.stock = None
+            product.metadata["focused"] = False
+            product.metadata["catalog_only"] = True
+        for profile, index in cheapest.items():
+            product = products[index]
+            self._lowest_tiers["%s:%s" % (region["slug"], profile)] = {
+                "plan_key": product.key,
+                "name": product.name,
+                "price": product.price,
+                "available": product.available,
+                "url": product.url,
+                "region": product.region,
+                "region_label": product.category,
+                "routing_profile": product.metadata.get("routing_profile"),
+            }
 
     def _pricing(
         self, value: Dict[str, Any], region_slug: str, plan_id: str
@@ -363,15 +479,24 @@ class MisakaProvider(BaseProvider):
             result["bandwidth"] = str(routing)
         return result
 
-    def _region_label(self, region: Dict[str, Any]) -> str:
-        code = region["country_code"]
-        return self.focus_region_labels.get(code) or region["name"]
+    def _focus_entry(self, region: Dict[str, Any]) -> Optional[str]:
+        for key in (region["slug"].upper(), region["country_code"]):
+            if key in self.focus_regions:
+                return key
+        return None
 
-    def _focus_sort_order(self, country_code: str) -> int:
-        try:
-            return self.focus_regions.index(country_code)
-        except ValueError:
+    def _region_label(self, region: Dict[str, Any]) -> str:
+        return (
+            self.focus_region_labels.get(region["slug"].upper())
+            or self.focus_region_labels.get(region["country_code"])
+            or region["name"]
+        )
+
+    def _focus_sort_order(self, region: Dict[str, Any]) -> int:
+        entry = self._focus_entry(region)
+        if entry is None:
             return len(self.focus_regions) + 1
+        return self.focus_regions.index(entry)
 
     def _get_json(self, url: str) -> Any:
         attempts = max(1, int(self.config.get("retry_attempts", 2)))
