@@ -95,6 +95,7 @@ fac_tg_watch:
         品川 Shinagawa: [shinagawa, 品川]
         东京 TINY: ["tyo+tiny", tyoprotiny]
         Malibu: [malibu]
+        T1.WEE: [t1.wee, "t1 wee", wee.tyo, wee.lax, tyot1wee, laxt1wee]
     # Not watched (user, 2026-11-10): @DMITstock -1001785967044 ("DMIT交易/拼车/
     # 补货") is mostly members' buy/sell posts, and its posts reach this
     # account empty (likely on purpose). A trading channel can be added back
@@ -209,6 +210,10 @@ providers:
       - {pid: 179, name: TYO.Pro.Shinagawa, region: Tokyo, keywords: [shinagawa]}
       - {pid: 138, name: TYO.Pro.TINY, region: Tokyo, keywords: ["tyo+tiny"]}
       - {pid: 186, name: LAX.Pro.MALIBU, region: Los Angeles, keywords: [malibu]}
+      # Regular T1.WEE plan ($36.90/yr), TYO + LAX only (user, 2026-11-15; HK
+      # 197 not wanted): restocks, sold-outs and price changes all alert.
+      - {pid: 228, name: TYO.T1.WEE, region: Tokyo, keywords: ["tyo+wee"], notify_changes: true}
+      - {pid: 270, name: LAX.T1.WEE, region: Los Angeles, keywords: ["lax+wee"], notify_changes: true}
 
   # Off since 2026-11-10 (user): @dmitnews is now pushed through
   # fac_tg_watch.watch_channels; this polled its public web page every 150 s.

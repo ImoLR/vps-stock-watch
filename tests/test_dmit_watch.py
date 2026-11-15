@@ -74,6 +74,16 @@ class DmitWatchTest(unittest.TestCase):
         self.assertFalse(provider.should_notify(Change(ChangeType.PRICE, product)))
         self.assertFalse(provider.should_notify(Change(ChangeType.NEW, Product("dmit", "1", "x", available=False))))
 
+    def test_notify_changes_entry_alerts_sold_out_and_price(self):
+        provider = DmitProvider(dict(WATCH))
+        wee = Product("dmit", "228", "TYO.T1.WEE", pricing={"annually": "$36.90 USD"}, metadata={"notify_changes": True})
+        old = Product("dmit", "228", "TYO.T1.WEE", pricing={"annually": "$39.90 USD"})
+        self.assertTrue(provider.should_notify(Change(ChangeType.SOLD_OUT, wee)))
+        self.assertTrue(provider.should_notify(Change(ChangeType.PRICE, wee, old, ["pricing"])))
+        first_read = Product("dmit", "228", "TYO.T1.WEE", pricing={})
+        self.assertFalse(provider.should_notify(Change(ChangeType.PRICE, wee, first_read, ["pricing"])))
+        self.assertFalse(provider.should_notify(Change(ChangeType.REMOVED, wee)))
+
     def test_sold_out_prices_are_kept(self):
         provider = self.provider([(CONFPRODUCT, IN_STOCK), ("u", SOLD_OUT), ("u", SOLD_OUT)])
         provider.fetch_products()

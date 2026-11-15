@@ -86,6 +86,7 @@ class DmitProvider(BaseProvider):
                 "stock_source": "order_page",
                 "page_name": page_name,
                 "pid_reused": mismatch,
+                "notify_changes": bool(spec.get("notify_changes")),
             },
         )
 
@@ -190,8 +191,14 @@ class DmitProvider(BaseProvider):
             return True
         if change.type == ChangeType.NEW:
             return bool(change.product.available)
+        # notify_changes on a watch_pids entry (T1.WEE, user 2026-11-15): its
+        # sold-outs and price changes alert too, not only restocks.
+        every_change = bool(change.product.metadata.get("notify_changes"))
         if change.type == ChangeType.SOLD_OUT:
-            return bool(self.config.get("notify_sold_out", False))
+            return every_change or bool(self.config.get("notify_sold_out", False))
+        if change.type == ChangeType.PRICE:
+            # Prices are first read on an in-stock page: {} -> prices is not a change.
+            return every_change and bool(change.old and change.old.pricing and change.product.pricing)
         return change.type == ChangeType.NAME and "pid_reused" in change.fields
 
     def _fetch_catalog_html(self) -> str:
