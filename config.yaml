@@ -112,7 +112,7 @@ fac_autobuy:
   enabled: true
   name_include: [seednet]
   name_exclude: [nat]
-  max_total: 280
+  max_total: 300
   coupons: []
   default_urls:
     - https://fachost.cloud/products/special-regulations
