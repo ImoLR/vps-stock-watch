@@ -1103,7 +1103,7 @@ class BoilAutoBuyer:
             return "已触发，正在盯 %d 个链接：%s" % (len(self.armed), "、".join(
                 url if entry["public"] else "%s（未公开，只看菜单）" % url
                 for url, entry in self.armed.items()))
-        return "待命（还要买：%s）：等 BOIL TG 频道/官方账号发链接或优惠码，festive-offer 上架，或公开分组上货" % left
+        return "待命（还要买：%s）：等 BOIL TG 频道/官方账号发链接，或 festive-offer 上架" % left
 
     def run(self) -> int:
         signal.signal(signal.SIGTERM, self._on_signal)
