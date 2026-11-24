@@ -132,8 +132,11 @@ fac_autobuy:
 # Hidden links: notify only, ordered once public (TG post, or the group is
 # listed in the shop menu). Paid from the balance ($600 topped up 11-24).
 # Rules (user, 2026-11-24), one plan per target, then it pauses itself:
-#  - dynamic only: the text must say 動態, and name no 靜態/static, NAT/CGNAT,
-#    blind box;
+#  - dynamic IPv4 only (BOIL: what doesn't say 動態 is static): a 動態 about
+#    IPv4 or a plain "IP" ("動態 IP", "動態 PPPoE IP"), no 靜態 about them;
+#    either word about IPv6 doesn't count ("IPv6 /64（SLAAC・動態）" alone is
+#    not enough, "動態 IPv4・靜態 IPv6" is fine, "靜態IPv4・動態IPv6" is not);
+#    no NAT/CGNAT or blind box;
 #  - SeedNet: annual-only plan <= $28.5/month, or a plan with monthly/
 #    quarterly/annual cycles whose cheapest cycle is <= $28.5/month;
 #  - Japan/USA: annual-only <= $40/month, or several cycles < $30/month
@@ -152,7 +155,8 @@ boil_autobuy:
     - {key: seednet, label: SeedNet, include: [seednet, seed net, 遠傳, 远传], annual_only_month: 28.5, any_cycle_month: 28.5}
     - {key: jpus, label: 日本/美國, include: [日本, japan, 美國, 美国, usa], annual_only_month: 40, any_cycle_month: 29.99, need_balance: true}
   require_words: [動態, 动态, dynamic]
-  name_exclude: [nat, cgnat, 靜態, 静态, static, 盲盒, lucky box, 福袋]
+  static_words: [靜態, 静态, static]
+  name_exclude: [nat, cgnat, 盲盒, lucky box, 福袋]
   short_cycles: [monthly, quarterly, semiannually]
   max_total: 480
   sale_groups: [festive-offer]

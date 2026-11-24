@@ -91,11 +91,14 @@ DEFAULTS: Dict[str, Any] = {
         {"key": "jpus", "label": "日本/美國", "include": ["日本", "japan", "美國", "美国", "usa"],
          "annual_only_month": 40.0, "any_cycle_month": 29.99, "need_balance": True},
     ],
-    # Every target must say it is dynamic ...
+    # The IPv4 must be dynamic (user, 2026-11-24; BOIL: whatever doesn't say
+    # 動態 is static): a dynamic word about IPv4 or a plain "IP", and no
+    # static word about them. Words about IPv6 don't count either way
+    # ("IPv6 /64（SLAAC・動態）", "靜態IPv4・動態IPv6"); see ipv4_dynamic().
     "require_words": ["動態", "动态", "dynamic"],
-    # ... and name none of these (Latin ones as whole words): NAT, CGNAT,
-    # static IP (also "靜態IPv4・動態IPv6"), random blind boxes.
-    "name_exclude": ["nat", "cgnat", "靜態", "静态", "static", "盲盒", "lucky box", "福袋"],
+    "static_words": ["靜態", "静态", "static"],
+    # And none of these (Latin ones as whole words): NAT, CGNAT, blind boxes.
+    "name_exclude": ["nat", "cgnat", "盲盒", "lucky box", "福袋"],
     # A plan offering any of these is not an annual-only plan.
     "short_cycles": ["monthly", "quarterly", "semiannually"],
     # Hard ceiling on today's total, whatever the rules allow.
@@ -194,9 +197,57 @@ def mentions(text: str, words: Iterable[str]) -> bool:
     return any(word.casefold() in lowered for word in words)
 
 
+def _word_spans(text: str, words: Iterable[str]) -> List[Tuple[int, int]]:
+    lowered = text.lower()  # keeps CJK offsets
+    spans = []
+    for word in words:
+        word = word.lower()
+        if not word:
+            continue
+        pattern = re.escape(word)
+        if re.fullmatch(r"[a-z ]+", word):
+            pattern = r"(?<![a-z])%s(?![a-z])" % pattern
+        spans.extend(match.span() for match in re.finditer(pattern, lowered))
+    return spans
+
+
+def ip_family(text: str, start: int, end: int) -> str:
+    """Whether the word at text[start:end] is about "v4", "v6" or a plain IP ("any").
+
+    "動態IPv6" / "IPv6：動態" name the family next to the word; inside
+    brackets the family is the one named just before them, as in
+    "HiNet IPv6 /64（SLAAC・動態）".
+    """
+    after = re.sub(r"[\s:：]", "", text[end:end + 12]).lower()
+    for family in ("v6", "v4"):
+        if after.startswith(("ip" + family, family)):
+            return family
+    before = re.sub(r"[\s:：]", "", text[max(0, start - 12):start]).lower()
+    for family in ("v6", "v4"):
+        if before.endswith(family):
+            return family
+    opener = max(text.rfind("（", 0, start), text.rfind("(", 0, start))
+    closer = max(text.rfind("）", 0, start), text.rfind(")", 0, start))
+    if opener > closer:
+        lead = text[max(0, opener - 24):opener].lower()
+        v6, v4 = lead.rfind("v6"), lead.rfind("v4")
+        if max(v6, v4) >= 0:
+            return "v6" if v6 > v4 else "v4"
+    return "any"
+
+
+def ipv4_dynamic(text: str, dynamic_words: Iterable[str], static_words: Iterable[str]) -> bool:
+    """True when the text says the IPv4 (or the plain IP) is dynamic and
+    never that it is static. What it says about IPv6 doesn't matter."""
+    text = text or ""
+    dynamic = any(ip_family(text, a, b) != "v6" for a, b in _word_spans(text, dynamic_words))
+    static = any(ip_family(text, a, b) != "v6" for a, b in _word_spans(text, static_words))
+    return dynamic and not static
+
+
 def match_target(text: str, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The first target whose words ``text`` names, if it is dynamic and clean."""
-    if not mentions(text, cfg["require_words"]):
+    """The first target whose words ``text`` names, if its IPv4 is dynamic and it is clean."""
+    if cfg.get("ipv4_rule", True) and not ipv4_dynamic(text, cfg["require_words"], cfg["static_words"]):
         return None
     for target in cfg["targets"]:
         if text_matches(text, target["include"], cfg["name_exclude"]):
@@ -540,7 +591,7 @@ class BoilAutoBuyer:
             STATUS_DIR,
             NAME,
             "BOIL SeedNet / 日本美國",
-            "动态（写明動態，非静态/NAT/CGNAT/盲盒）各买一台：%s；按今日总价折合每月，"
+            "动态 IPv4（写明動態且不是 IPv6 的，IPv4 不能写静态；非 NAT/CGNAT/盲盒）各买一台：%s；按今日总价折合每月，"
             "有官方优惠码就用，余额付款" % "；".join(
                 "%s 只有年付 ≤ $%g/月、多周期 ≤ $%g/月" % (t["label"], t["annual_only_month"], t["any_cycle_month"])
                 for t in self.targets),
@@ -1166,7 +1217,7 @@ class BoilAutoBuyer:
             raise SystemExit("need a product link or cart.php?a=add&pid=N")
         pid = value
         # Tests use a broad target so a public regular product can stand in.
-        self.cfg = dict(self.cfg, require_words=[""], name_exclude=[], targets=[{
+        self.cfg = dict(self.cfg, ipv4_rule=False, name_exclude=[], targets=[{
             "key": "test", "label": "测试", "include": [""], "annual_only_month": 1e9, "any_cycle_month": 1e9}])
         self.targets = self.cfg["targets"]
         self.done = {}

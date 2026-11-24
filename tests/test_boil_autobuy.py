@@ -94,6 +94,30 @@ class HelperTest(unittest.TestCase):
         self.assertIsNone(key("1區 - 靜態 ATT 500Mbps VPS 加州・美國 靜態IPv4・動態IPv6"))
         self.assertIsNone(key("2區 - SoftBank 100Mbps VPS 東京練馬・日本 1TB 流量"))  # no 動態
         self.assertEqual(key("2027 羊年 Comcast 1000Mbps 加州・美國 動態 IP"), "jpus")
+        self.assertIsNone(key("3區 - 靜態 BIGLOBE 1000Mbps VPS 日本 靜態 IP 位址「MAP-E」"))
+
+    def test_ipv4_must_be_dynamic(self):
+        def ok(text):
+            return ba.ipv4_dynamic(text, CFG["require_words"], CFG["static_words"])
+
+        # BOIL's own SeedNet text: the IPv6 is dynamic too, the PPPoE IP counts.
+        self.assertTrue(ok("SeedNet 獨立 IPv4 ×1 HiNet IPv6 /64（SLAAC・動態） 動態 PPPoE IP"))
+        self.assertTrue(ok("動態 IP 位址"))
+        self.assertTrue(ok("動態 IP・支援自主更換"))
+        # Only the IPv6 is dynamic: not enough.
+        self.assertFalse(ok("SeedNet 獨立 IPv4 ×1 HiNet IPv6 /64（SLAAC・動態）"))
+        self.assertFalse(ok("IPv6：動態"))
+        self.assertFalse(ok("靜態IPv4・動態IPv6"))
+        # Static IPv6 is fine; a static IPv4 / plain static IP is not.
+        self.assertTrue(ok("動態 IPv4・靜態 IPv6 /64"))
+        self.assertTrue(ok("動態 PPPoE IP，IPv6 /64（靜態）"))
+        self.assertFalse(ok("動態 IPv6・靜態 IPv4"))
+        self.assertFalse(ok("靜態 IP 位址 動態 IPv6"))
+        self.assertFalse(ok("靜態 SeedNet 500Mbps 動態 IP"))
+        # No word at all: static.
+        self.assertFalse(ok("SeedNet 獨立 IPv4 ×1"))
+        self.assertTrue(ok("Dynamic IPv4, static IPv6"))
+        self.assertFalse(ok("Static IP, dynamic IPv6"))
 
     def test_plan_cycles(self):
         seednet, jpus = CFG["targets"]
