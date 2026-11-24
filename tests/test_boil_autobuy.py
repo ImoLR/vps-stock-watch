@@ -161,14 +161,10 @@ class HelperTest(unittest.TestCase):
         japan = BASE + "store/japan-shared-bandwidth"
         self.assertEqual(targets("boilcloud_sale", "靜態 SoftBank 1000Mbps 日本", [japan], public=True), [])
         self.assertEqual(targets("boilcloud_sale", "SoftBank 1000Mbps 日本 動態 IP", [japan], public=True), [japan])
-        # A BOIL promo code: the regular groups too (quiet); a promo post with no code: nothing.
-        self.assertEqual(targets("tg-channel", "黑五優惠碼：BF2026", [BASE], promo=True), CFG["promo_urls"])
-        self.assertEqual(targets("tg-channel", "優惠碼明天公布", [BASE], promo=True), [])
-        coded = targets("tg-channel", "聖誕快樂 優惠碼 XMAS", [festive])
-        self.assertEqual(coded, [festive] + CFG["promo_urls"])
-        trigger = {"source": "tg-channel", "text": "優惠碼 XMAS", "urls": [festive]}
-        self.assertFalse(ba.quiet_target(festive, trigger, CFG))
-        self.assertTrue(ba.quiet_target(CFG["promo_urls"][0], trigger, CFG))
+        # A code-only post arms nothing (the buyer learns the code); with a link, just the link.
+        self.assertEqual(targets("tg-channel", "黑五優惠碼：BF2026", [BASE], promo=True), [])
+        self.assertEqual(targets("tg-channel", "聖誕快樂 優惠碼 XMAS", [festive]), [festive])
+        self.assertFalse(ba.quiet_target(festive, {"source": "boilcloud_sale", "urls": [festive]}, CFG))
         self.assertTrue(ba.quiet_target(japan, {"source": "boilcloud_sale", "urls": [japan]}, CFG))
         self.assertFalse(ba.quiet_target(japan, {"source": "tg-channel", "urls": [japan]}, CFG))
 
@@ -350,6 +346,52 @@ class BuyerTest(unittest.TestCase):
             self.assertTrue((Path(tmp) / "done.json").exists())
             self.assertTrue(buyer.switch.control.paused())
             self.assertEqual(buyer.armed, {})
+
+    def test_japan_is_bought_only_when_the_balance_pays_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(name="2027 羊年 SoftBank 1000Mbps VPS", desc="東京・日本 動態 IP",
+                            cycles=[("annually", "$468.00 USD 年繳")],
+                            checkout=checkout_page(total="$468.00 USD", balance="$258.00 USD"))
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("600"), ba.OrderResult.WAIT)  # stays armed for a top-up
+            self.assertIsNone(site.posted_checkout)
+            self.assertIn("余额不够", buyer.sent[0])
+            self.assertNotIn("600", buyer.price_dropped)
+            buyer.order("600")
+            self.assertEqual(len(buyer.sent), 1)  # told once
+            site.checkout = checkout_page(total="$468.00 USD", balance="$600.00 USD")
+            self.assertEqual(buyer.order("600"), ba.OrderResult.BOUGHT)
+
+    def test_seednet_is_ordered_even_if_the_balance_is_short(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(checkout=checkout_page(total="$291.00 USD", balance="$100.00 USD"), invoice_status="Unpaid")
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("540"), ba.OrderResult.BOUGHT)
+            self.assertIn("还没付清", buyer.sent[0])
+
+    def test_seednet_card_goes_before_japan_in_one_festive_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            site_request = site.request
+            page = category_html([("festive-offer", "節日特別提供")], [
+                {"pid": 601, "name": "2027 羊年 SoftBank 1000Mbps VPS", "stock": 1, "region": "東京・日本",
+                 "bandwidth": "動態 IP", "cycle": ("annually", "年繳")},
+                {"pid": 540, "name": "2027 羊年 SeedNet 300Mbps VPS", "stock": 1, "bandwidth": DYNAMIC,
+                 "cycle": ("annually", "年繳")},
+            ], current="festive-offer")
+
+            def request(method, url, **kwargs):
+                if url.endswith("store/festive-offer"):
+                    site.calls.append((method, url))
+                    return resp(page, BASE + "store/festive-offer")
+                return site_request(method, url, **kwargs)
+
+            buyer = self.buyer(tmp, site)
+            buyer.session.request = mock.Mock(side_effect=request)
+            buyer.arm([BASE + "store/festive-offer"], "tg-channel", True)
+            buyer.poll_armed()
+            added = [url for _, url in site.calls if "a=add&pid=" in url]
+            self.assertEqual(added[0], BASE + "cart.php?a=add&pid=540")
 
     def test_japan_annual_only_over_40_a_month_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -578,6 +620,20 @@ class MonitorHookTest(unittest.TestCase):
                 again = item.fetch_products()
             self.assertEqual(get.call_count, 1)
             self.assertEqual([p.product_id for p in again], ids)
+
+    def test_dropped_watch_groups_forget_their_restored_cards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            item = BoilcloudSaleProvider({"name": "boilcloud_sale", "autobuy_trigger_dir": tmp, "feed_every_rounds": 100})
+            item._sleep = lambda seconds: None
+            card = {"provider": "boilcloud_sale", "product_id": "493", "name": "靜態 ATT 2000Mbps", "available": True,
+                    "metadata": {"discovery": {"type": "public_group", "hidden": False, "source": "store/usa-shared-bandwidth"}}}
+            item.restore_state({"products": {"boilcloud_sale:493": card}})
+            self.assertIn("493", item._group_cards)
+            festive = category_html([("festive-offer", "節日特別提供")], [], empty=True)
+            with patch.object(item.session, "get", return_value=resp(festive, BASE + "store/festive-offer")):
+                products = item.fetch_products()
+            self.assertEqual([p.product_id for p in products], ["category:festive-offer"])
+            self.assertEqual(take_triggers(tmp), [])
 
     def test_post_trigger_passes_extra_fields(self):
         with tempfile.TemporaryDirectory() as tmp:

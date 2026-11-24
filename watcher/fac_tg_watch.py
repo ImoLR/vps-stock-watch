@@ -262,8 +262,8 @@ class Relay:
         self.staff = {
             str(value).lower().lstrip("@") for value in item.get("staff_usernames") or []
         }
-        # BOIL: a channel/staff post naming a promo code wakes the buyer
-        # even without a shop link (the buyer reads the code from the text).
+        # BOIL: a channel/staff post naming a promo code reaches the buyer
+        # even without a shop link (the buyer learns the code from the text).
         self.promo_words = [str(word) for word in item.get("promo_words") or []]
         self.promo_url = str(item.get("promo_url") or "")
         trigger_dir = item.get("autobuy_trigger_dir")

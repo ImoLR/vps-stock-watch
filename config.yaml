@@ -137,16 +137,20 @@ fac_autobuy:
 #  - SeedNet: annual-only plan <= $28.5/month, or a plan with monthly/
 #    quarterly/annual cycles whose cheapest cycle is <= $28.5/month;
 #  - Japan/USA: annual-only <= $40/month, or several cycles < $30/month
-#    (29.99), likely only with a promo code;
+#    (29.99), likely only with a promo code; SeedNet comes first (cards in
+#    config order) and Japan/USA is bought only if the balance pays it in
+#    full (need_balance), so it never leaves an invoice that eats SeedNet's
+#    money;
 #  - per month = today's total (price + setup fee, after a promo code) /
 #    the cycle's months; the cheapest cycle per month is bought;
 #  - promo codes posted on BOIL's channel or by staff are used (14 days);
-#    codes from ordinary group members are not.
+#    codes from ordinary group members are not. A code post only teaches
+#    the code; it arms nothing by itself.
 boil_autobuy:
   enabled: true
   targets:
     - {key: seednet, label: SeedNet, include: [seednet, seed net, 遠傳, 远传], annual_only_month: 28.5, any_cycle_month: 28.5}
-    - {key: jpus, label: 日本/美國, include: [日本, japan, 美國, 美国, usa], annual_only_month: 40, any_cycle_month: 29.99}
+    - {key: jpus, label: 日本/美國, include: [日本, japan, 美國, 美国, usa], annual_only_month: 40, any_cycle_month: 29.99, need_balance: true}
   require_words: [動態, 动态, dynamic]
   name_exclude: [nat, cgnat, 靜態, 静态, static, 盲盒, lucky box, 福袋]
   short_cycles: [monthly, quarterly, semiannually]
@@ -298,16 +302,9 @@ providers:
     # is festive-offer opening or closing (the hidden-link heads-up); cards,
     # Taiwan SeedNet stock and new feed PIDs are silent.
     notify_only_events: [sale_category]
-    # 2026-11-11: the 马年/蛇年 HiNet plans belong to the public A區 Taiwan
-    # group, so a SeedNet plan may be listed straight on a Taiwan page.
-    # Every 2nd round (10 min) the public groups are read and only target
-    # cards kept; a listed one is public. 2026-11-24: + the new Taiwan group
-    # (SeedNet moved there) and Japan/USA for the buyer's 日本/美國 target
-    # (6 pages, +864 requests/day, ~1.4k/day in all).
-    watch_groups: [taiwan-home-broadband, taiwan-shared-bandwidth, taiwan-b-shared-bandwidth,
-                   taiwan-d-shared-bandwidth, japan-shared-bandwidth, usa-shared-bandwidth]
-    watch_keywords: [seednet, seed net, 遠傳, 远传, 日本, japan, 美國, 美国, usa]
-    watch_every_rounds: 2
+    # 2026-11-24 (user): only festive-offer (+ TG). Sale plans are always
+    # put there, never in the regular Taiwan/Japan/USA groups, so those are
+    # not read (watch_groups, the code is kept, was the 3 Taiwan groups).
     feed_every_rounds: 3
     probe_ahead: 2
     feed_start_pid: 528

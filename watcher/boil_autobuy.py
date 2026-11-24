@@ -86,8 +86,10 @@ DEFAULTS: Dict[str, Any] = {
     "targets": [
         {"key": "seednet", "label": "SeedNet", "include": ["seednet", "seed net", "遠傳", "远传"],
          "annual_only_month": 28.5, "any_cycle_month": 28.5},
+        # Second choice: only when the balance pays it in full, so it never
+        # leaves an invoice that would eat SeedNet's money.
         {"key": "jpus", "label": "日本/美國", "include": ["日本", "japan", "美國", "美国", "usa"],
-         "annual_only_month": 40.0, "any_cycle_month": 29.99},
+         "annual_only_month": 40.0, "any_cycle_month": 29.99, "need_balance": True},
     ],
     # Every target must say it is dynamic ...
     "require_words": ["動態", "动态", "dynamic"],
@@ -105,15 +107,7 @@ DEFAULTS: Dict[str, Any] = {
     "sale_groups": ["festive-offer"],
     # A target sale post with a sale word but no store link arms these.
     "default_urls": ["https://cloud.boil.network/store/festive-offer"],
-    # A promo code from BOIL (channel or staff) is tried on these groups.
-    "promo_urls": [
-        "https://cloud.boil.network/store/taiwan-home-broadband",
-        "https://cloud.boil.network/store/taiwan-shared-bandwidth",
-        "https://cloud.boil.network/store/taiwan-b-shared-bandwidth",
-        "https://cloud.boil.network/store/taiwan-d-shared-bandwidth",
-        "https://cloud.boil.network/store/japan-shared-bandwidth",
-        "https://cloud.boil.network/store/usa-shared-bandwidth",
-    ],
+    # Promo codes from BOIL (channel or staff) are kept this long.
     "promo_days": 14,
     "sale_words": [
         "年付", "年繳", "年缴", "聖誕", "圣诞", "節日", "节日", "活動", "活动", "上架", "上新",
@@ -290,16 +284,15 @@ def trigger_targets(trigger: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
     on Telegram (the site monitor's trigger carries the cards' text); a
     public group the site monitor reads arms only for a card that is a
     target. A target sale post without a store link arms the default sale
-    group; a BOIL post with a promo code arms the regular groups too.
-    Maintenance notices and regular HKT restocks arm nothing.
+    group; a post that only carries a promo code arms nothing (the buyer
+    learns the code). Maintenance notices and regular HKT restocks arm nothing.
     """
     base = str(cfg["base_url"])
     text = str(trigger.get("text") or "")
     source = str(trigger.get("source") or "")
     about_target = mentions(text, target_words(cfg))
-    codes = promo_codes(text) if source.startswith("tg-") else []
-    if trigger.get("promo") and not codes:
-        return []  # a promo-word post with no code in it
+    if trigger.get("promo"):
+        return []  # a code-only post: the buyer just learns the code
     targets: List[str] = []
     other = False
     for url in trigger.get("urls") or []:
@@ -319,27 +312,16 @@ def trigger_targets(trigger: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
             other = True
         if target and target not in targets:
             targets.append(target)
-    if trigger.get("promo"):
-        targets = []  # only the placeholder link the relay adds
-    elif not targets and (other or not trigger.get("urls")) and about_target and mentions(text, cfg["sale_words"]):
+    if not targets and (other or not trigger.get("urls")) and about_target and mentions(text, cfg["sale_words"]):
         targets.extend(url for url in cfg["default_urls"] if url not in targets)
-    if codes:
-        targets.extend(url for url in cfg["promo_urls"] if url not in targets)
     return targets
 
 
 def quiet_target(url: str, trigger: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
-    """Regular groups armed by the site monitor or a promo code: misses are
-    logged, not sent (they would repeat for every regular plan)."""
-    base = str(cfg["base_url"])
-    kind, value = classify_url(url, base)
-    if kind != "group" or value in cfg["sale_groups"]:
-        return False
-    if trigger.get("source") == "boilcloud_sale":
-        return True
-    own = {urljoin(base, "store/%s" % classify_url(str(link), base)[1])
-           for link in trigger.get("urls") or [] if classify_url(str(link), base)[0] == "group"}
-    return url not in own
+    """A regular group armed by the site monitor (if ``watch_groups`` is used):
+    misses are logged, not sent (they would repeat for every regular plan)."""
+    kind, value = classify_url(url, str(cfg["base_url"]))
+    return kind == "group" and value not in cfg["sale_groups"] and trigger.get("source") == "boilcloud_sale"
 
 
 def group_listed(page_html: str, slug: str, base_url: str) -> bool:
@@ -628,8 +610,8 @@ class BoilAutoBuyer:
             LOG.exception("cannot save promo codes")
         self.price_dropped.clear()
         LOG.info("promo codes from %s: %s", source, new)
-        self.notify("🎟 <b>BOIL 优惠码</b> %s\n来自 %s。会用它再查一遍台灣/日本/美國分组里的动态 SeedNet / 日美商品，"
-                    "折合每月够低就买；没买到不再逐个通知。" % (html.escape("、".join(new)), html.escape(source)))
+        self.notify("🎟 <b>BOIL 优惠码</b> %s\n来自 %s。之后下单都会先填这个码，再按用码后的价格判断。"
+                    % (html.escape("、".join(new)), html.escape(source)))
 
     def beat(self, **values: Any) -> None:
         # One-off test/login runs must not overwrite the service's status.
@@ -821,6 +803,20 @@ class BoilAutoBuyer:
                 misses.append("%s：今日总价 $%.2f，折合每月 $%.2f" % (label, total, per_month))
                 self.empty_cart()
                 continue
+            if target.get("need_balance") and (balance is None or balance + 0.005 < total):
+                # Keep the link armed: it is bought once the user tops up.
+                key = "balance:%s" % pid
+                if key not in self.notified:
+                    self.notified.add(key)
+                    self.notify(
+                        "💰 <b>BOIL 抢购：%s 符合条件，但余额不够，没有下单</b>\n%s · %s：今日总价 $%.2f"
+                        "（每月 $%.2f），余额 %s\n%s 要余额全额付清才买（不占 SeedNet 的钱）；充值后程序会自己再试。\n%s"
+                        % (html.escape(name), html.escape(target["label"]), html.escape(label), total, per_month,
+                           "$%.2f" % balance if balance is not None else "读不到", html.escape(target["label"]),
+                           html.escape(cart_link(self.base_url, pid)))
+                    )
+                self.empty_cart()
+                return OrderResult.WAIT
             if mode == "dry":
                 print("DRY RUN ok: %s, %s, total $%.2f ($%.2f/month), balance %s, checkout fields %s"
                       % (name, label, total, per_month, balance, sorted(form)))

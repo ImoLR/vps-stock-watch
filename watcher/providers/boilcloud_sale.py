@@ -150,7 +150,10 @@ class BoilcloudSaleProvider(BoilcloudProvider):
         in the shop, so an orderable one wakes the buyer as public."""
         groups = [str(value) for value in self.config.get("watch_groups") or []]
         every = max(1, int(self.config.get("watch_every_rounds", 2)))
-        if not groups or self._rounds % every:
+        if not groups:
+            self._group_cards = {}  # cards restored from before the groups were dropped
+            return
+        if self._rounds % every:
             return
         keywords = [str(word).casefold() for word in self.config.get("watch_keywords") or ["seednet"]]
         found: Dict[str, Product] = {}
