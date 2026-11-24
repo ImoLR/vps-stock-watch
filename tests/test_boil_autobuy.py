@@ -20,6 +20,9 @@ BASE = "https://cloud.boil.network/"
 CFG = dict(ba.DEFAULTS)
 
 
+DYNAMIC = "300Mbps 共享頻寬 動態 PPPoE IP"
+
+
 def conf_page(name="2027 羊年 SeedNet 300Mbps VPS", cycles=None, desc="遠傳 SeedNet 寬頻 動態 IP"):
     cycles = cycles or [("annually", "$288.00 USD 年繳 + $3.00 USD 設定費")]
     options = "".join('<option value="%s">%s</option>' % item for item in cycles)
@@ -71,15 +74,54 @@ class HelperTest(unittest.TestCase):
         self.assertIsNone(ba.parse_usd("免費"))
 
     def test_target_filter(self):
-        inc, exc = CFG["name_include"], CFG["name_exclude"]
-        self.assertTrue(ba.text_matches("2027 羊年 SeedNet 300Mbps VPS 動態 IP", inc, exc))
-        self.assertTrue(ba.text_matches("台中 遠傳 VPS", inc, exc))
-        self.assertFalse(ba.text_matches("1區NAT - SeedNet 300M", inc, exc))
-        self.assertFalse(ba.text_matches("靜態 SeedNet 500Mbps", inc, exc))
-        self.assertFalse(ba.text_matches("聖誕盲盒（獎池含 SeedNet 年付）", inc, exc))
-        self.assertFalse(ba.text_matches("2026年馬上來HiNet 248Mbps", inc, exc))
+        def key(text):
+            target = ba.match_target(text, CFG)
+            return target and target["key"]
+
+        self.assertEqual(key("2027 羊年 SeedNet 300Mbps VPS 動態 PPPoE IP"), "seednet")
+        self.assertEqual(key("台中 遠傳 VPS 動態 IP"), "seednet")
+        self.assertIsNone(key("2027 羊年 SeedNet 300Mbps VPS"))  # no 動態: not bought
+        self.assertIsNone(key("1區NAT - SeedNet 300M 動態"))
+        self.assertIsNone(key("靜態 SeedNet 500Mbps 動態 IPv6"))
+        self.assertIsNone(key("聖誕盲盒（獎池含 SeedNet 年付）動態"))
+        self.assertIsNone(key("2026年馬上來HiNet 248Mbps 動態 IP"))
         # "nat" only as a word.
-        self.assertTrue(ba.text_matches("SeedNet International VPS", inc, exc))
+        self.assertEqual(key("SeedNet International VPS 動態"), "seednet")
+        # Japan / USA, as BOIL words them.
+        self.assertEqual(key("2區 - SoftBank 1000Mbps VPS 東京練馬・日本 動態 IP・支援自主更換"), "jpus")
+        self.assertEqual(key("1區 - NTT/docomo 5G Mobile VPS 東京・日本 動態 IP 位址"), "jpus")
+        self.assertIsNone(key("3區 - JCOM 1000Mbps VPS 東京練馬・日本 動態 IP 位址「CGNAT」"))
+        self.assertIsNone(key("1區 - 靜態 ATT 500Mbps VPS 加州・美國 靜態IPv4・動態IPv6"))
+        self.assertIsNone(key("2區 - SoftBank 100Mbps VPS 東京練馬・日本 1TB 流量"))  # no 動態
+        self.assertEqual(key("2027 羊年 Comcast 1000Mbps 加州・美國 動態 IP"), "jpus")
+
+    def test_plan_cycles(self):
+        seednet, jpus = CFG["targets"]
+        short = CFG["short_cycles"]
+        annual_only = {"annually": "$288.00 USD 年繳 + $3.00 USD 設定費"}
+        self.assertEqual(ba.plan_cycles(annual_only, seednet, short, False), ("只有年付", 28.5, [("annually", 291 / 12)]))
+        self.assertEqual(ba.plan_cycles({"annually": "$348.00 USD 年繳"}, seednet, short, False)[2], [])
+        # Japan annual-only: up to $40 a month.
+        self.assertEqual(ba.plan_cycles({"annually": "$468.00 USD 年繳"}, jpus, short, False)[2], [("annually", 39.0)])
+        # Several cycles: cheapest per month first, over-cap ones left out ...
+        regular = {"monthly": "$38.00 USD 月繳", "quarterly": "$108.00 USD 季繳",
+                   "semiannually": "$-1.00 USD", "annually": "$428.00 USD 年繳"}
+        self.assertEqual(ba.plan_cycles(regular, seednet, short, False), ("多周期", 28.5, []))
+        mixed = {"monthly": "$28.00 USD 月繳", "annually": "$288.00 USD 年繳"}
+        self.assertEqual([c for c, _ in ba.plan_cycles(mixed, seednet, short, False)[2]], ["annually", "monthly"])
+        # ... unless a promo code may bring them down.
+        self.assertEqual([c for c, _ in ba.plan_cycles(regular, seednet, short, True)[2]],
+                         ["annually", "quarterly", "monthly"])
+        # Japan with several cycles: under $30 a month.
+        self.assertEqual(ba.plan_cycles({"monthly": "$30.00 USD 月繳"}, jpus, short, False)[2], [])
+        self.assertEqual(ba.plan_cycles({"monthly": "$29.00 USD 月繳"}, jpus, short, False)[2], [("monthly", 29.0)])
+
+    def test_promo_codes(self):
+        self.assertEqual(ba.promo_codes("黑五優惠碼：BF2026，年付 7 折"), ["BF2026"])
+        self.assertEqual(ba.promo_codes("优惠码 `XMAS-50` 和 折扣碼「NY27」"), ["XMAS-50", "NY27"])
+        self.assertEqual(ba.promo_codes("Promo code: boil88 (once per account)"), ["boil88"])
+        self.assertEqual(ba.promo_codes("優惠碼明天公布"), [])
+        self.assertEqual(ba.promo_codes("SeedNet 補貨了"), [])
 
     def test_classify_url(self):
         self.assertEqual(ba.classify_url(BASE + "cart.php?a=add&pid=540", BASE), ("pid", "540"))
@@ -112,9 +154,23 @@ class HelperTest(unittest.TestCase):
         )
         # SeedNet sale post with only the home page: the sale group.
         self.assertEqual(targets("tg-channel", "聖誕 SeedNet 年付 今晚上架", [BASE]), [festive])
-        # Site monitor: only when a card mentions SeedNet.
+        # Site monitor: only when a card mentions a target.
         self.assertEqual(targets("boilcloud_sale", "HKT 777Mbps 半年付", [festive], public=True), [])
         self.assertEqual(targets("boilcloud_sale", "羊年 SeedNet 300M", [festive], public=False), [festive])
+        # Site monitor on a public group (one card): only a full target.
+        japan = BASE + "store/japan-shared-bandwidth"
+        self.assertEqual(targets("boilcloud_sale", "靜態 SoftBank 1000Mbps 日本", [japan], public=True), [])
+        self.assertEqual(targets("boilcloud_sale", "SoftBank 1000Mbps 日本 動態 IP", [japan], public=True), [japan])
+        # A BOIL promo code: the regular groups too (quiet); a promo post with no code: nothing.
+        self.assertEqual(targets("tg-channel", "黑五優惠碼：BF2026", [BASE], promo=True), CFG["promo_urls"])
+        self.assertEqual(targets("tg-channel", "優惠碼明天公布", [BASE], promo=True), [])
+        coded = targets("tg-channel", "聖誕快樂 優惠碼 XMAS", [festive])
+        self.assertEqual(coded, [festive] + CFG["promo_urls"])
+        trigger = {"source": "tg-channel", "text": "優惠碼 XMAS", "urls": [festive]}
+        self.assertFalse(ba.quiet_target(festive, trigger, CFG))
+        self.assertTrue(ba.quiet_target(CFG["promo_urls"][0], trigger, CFG))
+        self.assertTrue(ba.quiet_target(japan, {"source": "boilcloud_sale", "urls": [japan]}, CFG))
+        self.assertFalse(ba.quiet_target(japan, {"source": "tg-channel", "urls": [japan]}, CFG))
 
     def test_public_rules(self):
         self.assertTrue(ba.trigger_is_public({"source": "tg-channel"}))
@@ -166,9 +222,15 @@ class HelperTest(unittest.TestCase):
 class FakeSite:
     """Answers the buyer's requests by URL; records every call."""
 
-    def __init__(self, checkout=None, invoice_status="Paid", add_url=None, cycles=None):
+    def __init__(self, checkout=None, invoice_status="Paid", add_url=None, cycles=None,
+                 name="2027 羊年 SeedNet 300Mbps VPS", desc="遠傳 SeedNet 寬頻 動態 IP", promo=None):
         self.calls = []
         self.cycles = cycles
+        self.name, self.desc = name, desc
+        # promo: (code, checkout page once the code is applied)
+        self.promo = promo
+        self.promo_applied = False
+        self.configured = []
         self.checkout = checkout or checkout_page()
         self.invoice_status = invoice_status
         self.add_url = add_url or BASE + "cart.php?a=confproduct&i=0"
@@ -179,12 +241,19 @@ class FakeSite:
         self.calls.append((method, url))
         if "a=empty" in url:
             return resp(url=BASE + "cart.php?a=view")
-        if "a=add&pid=" in url or "store/taiwan-home-broadband/" in url:
-            return resp(conf_page(cycles=self.cycles), self.add_url)
+        if "a=empty" not in url and ("a=add&pid=" in url or "store/taiwan-home-broadband/" in url):
+            self.promo_applied = False
+            return resp(conf_page(name=self.name, cycles=self.cycles, desc=self.desc), self.add_url)
         if "a=confproduct" in url:
+            self.configured.append(kwargs.get("data", {}).get("billingcycle"))
             return resp("")
+        if "a=view" in url and method == "POST":
+            code = kwargs.get("data", {}).get("promocode")
+            self.promo_applied = bool(self.promo) and code == self.promo[0]
+            return resp("" if self.promo_applied else '<div class="alert-danger">代碼無效</div>')
         if "a=checkout" in url and method == "GET":
-            return resp(self.checkout, BASE + "cart.php?a=checkout")
+            page = self.promo[1] if self.promo_applied else self.checkout
+            return resp(page, BASE + "cart.php?a=checkout")
         if "action=invoices" in url:
             return resp("".join('<a href="viewinvoice.php?id=%d">' % i for i in self.invoices))
         if "viewinvoice.php" in url:
@@ -194,10 +263,19 @@ class FakeSite:
         if "store/festive-offer" in url:
             return resp(
                 category_html([("festive-offer", "節日特別提供")], [
-                    {"pid": 540, "name": "2027 羊年 SeedNet 300Mbps VPS", "stock": 2},
-                    {"pid": 541, "name": "HKT 777Mbps", "stock": 5},
+                    {"pid": 540, "name": "2027 羊年 SeedNet 300Mbps VPS", "stock": 2, "bandwidth": DYNAMIC},
+                    {"pid": 541, "name": "HKT 777Mbps", "stock": 5, "bandwidth": DYNAMIC},
                 ], current="festive-offer"),
                 BASE + "store/festive-offer",
+            )
+        if "store/japan-shared-bandwidth" in url:
+            return resp(
+                category_html([("japan-shared-bandwidth", "日本")], [
+                    {"pid": 311, "name": "2區 - SoftBank 1000Mbps VPS", "stock": 1, "region": "東京・日本",
+                     "bandwidth": "動態 IP・支援自主更換"},
+                    {"pid": 310, "name": "2區 - 靜態 AsahiNet 1000Mbps VPS", "stock": 1, "region": "東京・日本"},
+                ], current="japan-shared-bandwidth"),
+                BASE + "store/japan-shared-bandwidth",
             )
         if "store/hong-kong-shared-bandwidth" in url:
             return resp(category_html([("hong-kong-shared-bandwidth", "香港")], [], empty=True))
@@ -218,6 +296,7 @@ class BuyerTest(unittest.TestCase):
             "cookie_file": str(Path(tmp) / "cookies.json"),
             "account_file": str(Path(tmp) / "none.env"),
             "trigger_dir": str(Path(tmp) / "triggers"),
+            "promo_file": str(Path(tmp) / "promo.json"),
             "page_spacing_seconds": 0, "order_spacing_seconds": 0,
         }}
         with patch.object(ba, "STATUS_DIR", str(Path(tmp) / "status")), \
@@ -236,14 +315,91 @@ class BuyerTest(unittest.TestCase):
             site = FakeSite()
             buyer = self.buyer(tmp, site)
             buyer.arm([BASE + "store/festive-offer"], "tg-channel", True)
-            self.assertTrue(buyer.poll_armed())
+            self.assertFalse(buyer.poll_armed())  # Japan/USA still to buy: keeps watching
             added = [url for _, url in site.calls if "a=add&pid=" in url]
             self.assertEqual(added, [BASE + "cart.php?a=add&pid=540"])  # HKT card never touched
             self.assertEqual(site.posted_checkout["accepttos"], "on")
             self.assertEqual(site.posted_checkout["applycredit"], "1")
-            marker = json.loads((Path(tmp) / "done.json").read_text("utf-8"))
-            self.assertEqual((marker["invoice"], marker["invoice_status"]), ("71", "Paid"))
-            self.assertIn("抢到了", buyer.sent[-1])
+            self.assertEqual(site.configured, ["annually"])
+            marker = json.loads((Path(tmp) / "done_seednet.json").read_text("utf-8"))
+            self.assertEqual((marker["target"], marker["invoice"], marker["invoice_status"]), ("seednet", "71", "Paid"))
+            self.assertFalse((Path(tmp) / "done.json").exists())
+            self.assertIn("抢到了", buyer.sent[-2])
+            self.assertIn("继续等：日本/美國", buyer.sent[-1])
+            self.assertIn(BASE + "store/festive-offer", buyer.armed)
+            self.assertFalse(buyer.switch.control.paused())
+            # The next round: SeedNet is done, nothing is ordered again.
+            buyer.armed[BASE + "store/festive-offer"]["next"] = 0
+            site.calls.clear()
+            buyer.poll_armed()
+            self.assertEqual([url for _, url in site.calls if "a=add" in url], [])
+
+    def test_both_targets_bought_pauses_the_buyer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "done_seednet.json").write_text(json.dumps({"product": "SeedNet", "invoice": "70"}), "utf-8")
+            site = FakeSite(name="2區 - SoftBank 1000Mbps VPS", desc="東京練馬・日本 動態 IP・支援自主更換",
+                            cycles=[("annually", "$468.00 USD 年繳")],
+                            checkout=checkout_page(total="$468.00 USD", balance="$600.00 USD"))
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(set(buyer.done), {"seednet"})
+            buyer.arm([BASE + "store/japan-shared-bandwidth"], "tg-channel", True)
+            self.assertTrue(buyer.poll_armed())
+            added = [url for _, url in site.calls if "a=add&pid=" in url]
+            self.assertEqual(added, [BASE + "cart.php?a=add&pid=311"])  # not the static one
+            self.assertTrue((Path(tmp) / "done_jpus.json").exists())
+            self.assertTrue((Path(tmp) / "done.json").exists())
+            self.assertTrue(buyer.switch.control.paused())
+            self.assertEqual(buyer.armed, {})
+
+    def test_japan_annual_only_over_40_a_month_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(name="SoftBank 1000Mbps VPS", desc="日本 動態 IP", cycles=[("annually", "$498.00 USD 年繳")])
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("311"), ba.OrderResult.DROP)
+            self.assertIn("价格不符", buyer.sent[0])
+            self.assertIn("≤ $40", buyer.sent[0])
+
+    def test_promo_code_brings_a_regular_plan_under_the_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            regular = [("monthly", "$38.00 USD 月繳"), ("quarterly", "$108.00 USD 季繳"), ("annually", "$428.00 USD 年繳")]
+            site = FakeSite(cycles=regular, checkout=checkout_page(total="$428.00 USD", balance="$600.00 USD"),
+                            promo=("BF2026", checkout_page(total="$299.60 USD", balance="$600.00 USD")))
+            buyer = self.buyer(tmp, site)
+            # Without a code: over $28.5 a month, not even configured.
+            self.assertEqual(buyer.order("551"), ba.OrderResult.DROP)
+            self.assertEqual(site.configured, [])
+            self.assertIn("551", buyer.price_dropped)
+            # BOIL posts a code: the miss is re-opened and the code tried.
+            buyer.learn_codes(["BF2026"], "tg-channel")
+            self.assertEqual(buyer.price_dropped, set())
+            self.assertIn("BF2026", buyer.sent[-1])
+            self.assertEqual(json.loads((Path(tmp) / "promo.json").read_text("utf-8"))[0]["code"], "BF2026")
+            self.assertEqual(buyer.order("551"), ba.OrderResult.BOUGHT)
+            self.assertEqual(site.configured, ["annually"])
+            marker = json.loads((Path(tmp) / "done_seednet.json").read_text("utf-8"))
+            self.assertIn("优惠码 BF2026", marker["plan"])
+
+    def test_wrong_promo_code_misses_quietly_for_a_code_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            regular = [("monthly", "$38.00 USD 月繳"), ("annually", "$428.00 USD 年繳")]
+            site = FakeSite(cycles=regular, checkout=checkout_page(total="$428.00 USD"), promo=("OTHER", ""))
+            buyer = self.buyer(tmp, site)
+            buyer.promos = [{"code": "BF2026", "at": 9e12}]
+            self.assertEqual(buyer.order("551", quiet=True), ba.OrderResult.DROP)
+            self.assertEqual(site.configured, ["annually", "monthly"])  # cheapest per month first
+            self.assertEqual(buyer.sent, [])
+            self.assertIsNone(site.posted_checkout)
+
+    def test_regular_group_from_the_monitor_disarms_after_one_look(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(name="2區 - SoftBank 1000Mbps VPS", desc="東京練馬・日本 動態 IP",
+                            cycles=[("monthly", "$198.00 USD 月繳")])
+            buyer = self.buyer(tmp, site)
+            japan = BASE + "store/japan-shared-bandwidth"
+            buyer.arm([japan], "boilcloud_sale", True, quiet=[japan])
+            self.assertFalse(buyer.poll_armed())
+            self.assertNotIn(japan, buyer.armed)
+            self.assertEqual(buyer.sent, [])
 
     def test_hidden_group_is_never_opened_logged_in(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -269,27 +425,45 @@ class BuyerTest(unittest.TestCase):
             buyer = self.buyer(tmp, site)
             self.assertEqual(buyer.order("540"), ba.OrderResult.DROP)
             self.assertIsNone(site.posted_checkout)
-            self.assertIn("超出预算", buyer.sent[0])
-            self.assertIn("540", buyer.dropped)
+            self.assertIn("价格不符", buyer.sent[0])
+            self.assertIn("折合每月 $32.34", buyer.sent[0])
+            self.assertIn("540", buyer.price_dropped)
+            buyer.order("540")
+            self.assertEqual(len(buyer.sent), 1)
             self.assertEqual(site.calls[-1][1], BASE + "cart.php?a=empty")
 
-    def test_plan_that_also_sells_monthly_is_skipped(self):
+    def test_plan_with_several_cycles_buys_the_cheapest_per_month(self):
         with tempfile.TemporaryDirectory() as tmp:
-            site = FakeSite(cycles=[("monthly", "$38.00 USD 月繳"), ("annually", "$288.00 USD 年繳")])
+            site = FakeSite(cycles=[("monthly", "$28.00 USD 月繳"), ("annually", "$288.00 USD 年繳")],
+                            checkout=checkout_page(total="$288.00 USD"))
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("540"), ba.OrderResult.BOUGHT)
+            self.assertEqual(site.configured, ["annually"])
+
+    def test_plan_with_several_cycles_all_over_the_cap_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(cycles=[("monthly", "$38.00 USD 月繳"), ("annually", "$428.00 USD 年繳")])
             buyer = self.buyer(tmp, site)
             self.assertEqual(buyer.order("540"), ba.OrderResult.DROP)
             self.assertIsNone(site.posted_checkout)
-            self.assertIn("不是只有年付", buyer.sent[0])
-            self.assertIn("月繳", buyer.sent[0])
+            self.assertIn("多周期", buyer.sent[0])
+            self.assertIn("折合每月 $35.67", buyer.sent[0])
             self.assertNotIn(("GET", BASE + "cart.php?a=checkout"), site.calls)
 
     def test_annual_price_over_28_5_a_month_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             site = FakeSite(cycles=[("annually", "$348.00 USD 年繳")])
             buyer = self.buyer(tmp, site)
-            self.assertEqual(buyer.max_total, 342)
             self.assertEqual(buyer.order("540"), ba.OrderResult.DROP)
-            self.assertIn("年付价 $348.00", buyer.sent[0])
+            self.assertIn("只有年付", buyer.sent[0])
+            self.assertIn("$348.00 USD 年繳，折合每月 $29.00", buyer.sent[0])
+            self.assertIsNone(site.posted_checkout)
+
+    def test_seednet_without_dynamic_is_not_bought(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(desc="遠傳 SeedNet 寬頻")
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("540"), ba.OrderResult.DROP)
             self.assertIsNone(site.posted_checkout)
 
     def test_annual_only_at_the_cap_is_bought(self):
@@ -305,7 +479,7 @@ class BuyerTest(unittest.TestCase):
             buyer = self.buyer(tmp, site)
             link = BASE + "store/taiwan-home-broadband/2027-seednet"
             buyer.arm([link], "tg-channel", True)
-            self.assertTrue(buyer.poll_armed())
+            buyer.poll_armed()
             self.assertIn(("GET", link), site.calls)
             self.assertIsNotNone(site.posted_checkout)
 
@@ -331,7 +505,7 @@ class BuyerTest(unittest.TestCase):
             self.assertEqual(buyer.order("540"), ba.OrderResult.BOUGHT)
             self.assertIn("还没付清", buyer.sent[0])
             self.assertIn("viewinvoice.php?id=71", buyer.sent[0])
-            self.assertIn("请马上手动付款", buyer.sent[-1])
+            self.assertIn("请马上手动付款", buyer.sent[-2])
 
     def test_out_of_stock_keeps_waiting(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -386,7 +560,7 @@ class MonitorHookTest(unittest.TestCase):
                 [("taiwan-shared-bandwidth", "A區台灣家寬「個人用戶」")],
                 [{"pid": 74, "name": "1區 - HiNet 500Mbps VPS", "stock": 0},
                  {"pid": 545, "name": "「羊年專輯」20區 - SeedNet 300Mbps VPS", "stock": 3,
-                  "cycle": ("annually", "年繳")}],
+                  "cycle": ("annually", "年繳"), "bandwidth": DYNAMIC}],
                 current="taiwan-shared-bandwidth",
             )
             pages = [resp(festive, BASE + "store/festive-offer"),

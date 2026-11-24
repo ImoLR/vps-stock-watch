@@ -854,20 +854,33 @@ systemctl enable --now fac-autobuy`。改了触发钩子后，`fac-tg-watch` 和
 `watcher.boil_autobuy`（`deploy/boil-autobuy.service`）和 FAC 一样不自己轮询，靠 BOIL TG 转发和
 `boilcloud_sale` 写到 `data/autobuy/boil_triggers/` 的触发文件唤醒，武装规则、公开规则（TG 发出
 即公开；只被网站监控看到的 festive-offer 要等出现在商城侧栏菜单才算公开，期间每 2 分钟不登录看一次
-公开页的菜单，绝不登录打开隐藏页；公开后满 4 秒才下单）、只买一台、TG `/autobuy` 暂停/恢复都和 FAC 相同。
+公开页的菜单，绝不登录打开隐藏页；公开后满 4 秒才下单）、TG `/autobuy` 暂停/恢复都和 FAC 相同。
 
-- 目标（用户 2026-11-11）：SeedNet（遠傳）年付，独立动态 IP，不要 NAT、静态 IP、盲盒；今日总价
-  （含设定费）≤ `max_total` $300；余额付款（用户开抢前充值）。预计圣诞前后出，按生肖起名
-  （2026 马年 HiNet，2027 应为羊年）。
+- 目标（用户 2026-11-11，2026-11-24 改成下面的规则，`boil_autobuy.targets`）：每类各买一台，两类都买到才自动停。
+  两类都必须是动态：名称/说明要写明“動態”，且不能出现“靜態/static”、NAT/CGNAT、盲盒/福袋
+  （美国 AT&T 写的是“靜態IPv4・動態IPv6”，日本 JCOM 是“動態 IP 位址「CGNAT」”，都不买）。
+  - SeedNet（遠傳）：只有年付的款 ≤ $28.5/月；或者有月/季/年多个周期的款，最便宜的周期折合 ≤ $28.5/月。
+  - 日本/美国（说明里有“日本”“美國”）：只有年付的款 ≤ $40/月；多周期的款 < $30/月（配置 29.99），
+    多半要靠官方优惠码。
+  - “只有年付”= 有年付、没有月/季/半年付（`short_cycles`）。每月价 = 今日总价（含设定费、用码后）÷
+    周期月数；多个周期都符合时买折合每月最便宜的（一样便宜取长的）。今日总价另有硬上限 `max_total` $480。
+  - 余额付款（2026-11-24 充值后 $600）。预计黑五、圣诞、新春前后出，按生肖起名（2026 马年 HiNet，2027 应为羊年）。
+- 优惠码：BOIL 频道或官方账号（`staff_usernames`）发的帖子里“優惠碼/折扣碼/promo code：XXX”会被记下
+  （`data/autobuy/boil_promo.json`，14 天），之后每次下单先在购物车页填码再看今日总价；普通群友发的码不用。
+  没有商城链接的官方优惠码帖也会唤醒程序（relay 的 `promo_words`/`promo_url`），并把台湾、日本、美国的公开分组
+  （`promo_urls`）各看一遍；这种扫描和网站监控带来的公开分组检查都是“安静”的：没买到只写日志，不逐个发 TG。
+  新码会让之前因价格放弃的商品再试一次。
 - 哪些触发会武装：商品直链（`cart.php?a=add&pid=N`、`/store/<分组>/<商品>`）一律试一次，名称不符就放弃；
-  分组链接只在帖子提到 SeedNet，或是 TG 发的 festive-offer 时武装；没有商城链接的 SeedNet 活动帖
-  武装 festive-offer；维护通知、HKT 补货这类帖子什么都不武装。`boilcloud_sale` 的触发带着商品卡文字，
-  没有 SeedNet 就不武装，避免一个 HKT 圣诞款让程序轮询好几天。
+  分组链接只在帖子提到目标（SeedNet/日本/美国），或是 TG 发的 festive-offer 时武装；没有商城链接的目标活动帖
+  武装 festive-offer；维护通知、HKT 补货这类帖子什么都不武装。`boilcloud_sale` 的 festive-offer 触发带着商品卡文字，
+  没有目标词就不武装；公开分组（台湾/日本/美国，每 10 分钟）的触发是单张卡，要完全符合目标才武装。普通分组里
+  没有可试的商品了就解除武装，不会轮询 6 小时。
 - 纯 HTTP（requests），不开浏览器：WHMCS 登录页没有验证码（`recaptchaSiteKey` 为空）。登录状态
   存在 `data/boil_cookies.json`，账号在 `data/boil_account.env`（`BOIL_EMAIL`/`BOIL_PASSWORD`），都是 0600、
   不进 git；空闲时每 12 小时检查一次登录。
-- 下单：`cart.php?a=add&pid=N` → 配置页（`billingcycle=annually`，下拉选项取默认/第一个不加价的，
-  不勾附加项，主机名 `seednet`，随机 root 密码）→ `cart.php?a=checkout` 读 `#totalDueToday` 和
+- 下单：`cart.php?a=add&pid=N` 或商品直链 → 配置页（按上面的规则选 `billingcycle`，下拉选项取默认/第一个不加价的，
+  不勾附加项，主机名 `boilvps`，随机 root 密码）→（有码就 POST `cart.php?a=view` 的 `promocode`）→
+  `cart.php?a=checkout` 读 `#totalDueToday` 和
   “可用信用餘額” → 勾服务条款提交（页面默认就选“从信用余额扣款”，程序不改）。下单这几步之间隔
   1.5 秒（约定的抢购目标），平时轮询和菜单检查隔 4 秒。结账表单如果不是已登录账号（`custtype` 不是
   `existing`）就不提交，先重新登录。
@@ -893,6 +906,12 @@ WHMCS 会拒绝（“您必須同意我們的服務條款”），不会建单�
 - 配置页的带宽升级选项带“+ $98.00 USD 設定費”，必须选不加价的那个。
 - 生肖款（马年 HiNet）后来不在任何公开分组里显示了，当时是频道发 festive-offer 链接卖的。
 - 单次充值上限 $999、下限 $3。
+- 商品直链 `/store/<分组>/<商品>` 会 302 到 `cart.php?a=confproduct&i=0`，网址和页面里都没有 PID。
+  2026-11-24 前的程序要从跳转里取 PID，取不到就悄悄丢掉，TG 发的商品直链因此全被忽略；现在直接用直链下单。
+- 2026-11 改版后 SeedNet 普通款搬到了 `store/taiwan-home-broadband`（11-24：月 $38、季 $108、年 $428，
+  说明写“動態 PPPoE IP”）；旧的三个台湾分组仍在。
+- 优惠码无效时购物车页显示黄色提示“您填寫的優惠代碼並不存在。”（`.alert-warning`）；页面上还有一个隐藏的
+  `.alert-danger`（密码长度提示），不是优惠码的结果。
 
 **FAC 的坑（2026-11-08）**
 

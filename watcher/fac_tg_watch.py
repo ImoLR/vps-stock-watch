@@ -262,6 +262,10 @@ class Relay:
         self.staff = {
             str(value).lower().lstrip("@") for value in item.get("staff_usernames") or []
         }
+        # BOIL: a channel/staff post naming a promo code wakes the buyer
+        # even without a shop link (the buyer reads the code from the text).
+        self.promo_words = [str(word) for word in item.get("promo_words") or []]
+        self.promo_url = str(item.get("promo_url") or "")
         trigger_dir = item.get("autobuy_trigger_dir")
         self.trigger_dir = str(base / str(trigger_dir)) if trigger_dir else None
         self.admins: Set[int] = set()
@@ -328,6 +332,9 @@ class FacTelegramWatch:
         directory = relay.trigger_dir if relay else self.trigger_dir
         if trusted and links:
             post_trigger(directory, source, links, text)
+        elif (trusted and relay is not None and relay.promo_url
+              and any(word.casefold() in (text or "").casefold() for word in relay.promo_words)):
+            post_trigger(directory, source, [relay.promo_url], text, promo=True)
 
     @staticmethod
     def _channel_link(relay: Relay, message_id: int) -> str:

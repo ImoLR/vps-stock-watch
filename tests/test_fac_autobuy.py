@@ -215,6 +215,23 @@ class TelegramHookTest(unittest.TestCase):
                 [("tg-group", [product]), ("tg-channel", ["https://fachost.cloud/announcements/3"])],
             )
 
+    def test_boil_promo_post_without_link_queues_a_promo_trigger(self):
+        from watcher.fac_tg_watch import Relay
+
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = self.watch(tmp)
+            relay = Relay("BOIL", {
+                "channel_id": -1, "link_hosts": ["cloud.boil.network"], "autobuy_trigger_dir": tmp,
+                "promo_words": ["優惠碼"], "promo_url": "https://cloud.boil.network/",
+            }, Path("/"))
+            relay.trigger_dir = tmp
+            watch.trigger("tg-group", "黑五優惠碼：BF2026", [], False, relay)  # member: ignored
+            watch.trigger("tg-channel", "黑五優惠碼：BF2026", [], True, relay)
+            watch.trigger("tg-channel", "黑五快樂", [], True, relay)  # no promo word: ignored
+            items = take_triggers(tmp)
+            self.assertEqual([(i["source"], i["urls"], i.get("promo")) for i in items],
+                             [("tg-channel", ["https://cloud.boil.network/"], True)])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -69,6 +69,10 @@ fac_tg_watch:
       # Boil, the shop account and the two support accounts the channel names.
       staff_usernames: [zby88zby, BoilCloud, McDonalds_Boil, mafumafu_i]
       autobuy_trigger_dir: data/autobuy/boil_triggers
+      # 2026-11-24 (user): promo codes from the channel or staff are used by
+      # boil-autobuy; such a post wakes it even without a shop link.
+      promo_words: [優惠碼, 优惠码, 折扣碼, 折扣码, 優惠代碼, 优惠代码, 促銷代碼, 促销代码, 促銷碼, 促销码, promo code, coupon]
+      promo_url: https://cloud.boil.network/
       keywords: [
         黑五, black friday, 雙11, 双11, 雙十一, 双十一, 雙12, 双12, 雙十二, 双十二,
         年付, 年繳, 年缴, festive, 節日, 节日, 盲盒, 聖誕, 圣诞, 週年, 周年,
@@ -125,22 +129,28 @@ fac_autobuy:
 # BOILCLOUD auto-buyer (watcher.boil_autobuy, deploy/boil-autobuy.service;
 # user, 2026-11-11). Plain HTTP (WHMCS, no captcha), no browser. Woken by the
 # BOIL TG relay and boilcloud_sale like the FAC buyer; never polls on its own.
-# Buys ONE SeedNet (遠傳) annual-only plan: independent dynamic IP, not NAT /
-# static / blind box, paid from the balance (user tops up before the sale),
-# then pauses itself. Expected around Christmas (2027 = 羊年 plan) or as a
-# Black Friday / holiday item. Hidden links: notify only, ordered once
-# public (TG post, or festive-offer listed in the shop menu).
-# 2026-11-24 (user): at most $28.5 a month over the year, so the annual price
-# and today's total must both be <= max_total = 28.5 x 12; a plan that also
-# sells monthly / quarterly / half-yearly (reject_cycles) is not the sale
-# plan and is skipped with a TG note. Balance $600 topped up 11-24.
+# Hidden links: notify only, ordered once public (TG post, or the group is
+# listed in the shop menu). Paid from the balance ($600 topped up 11-24).
+# Rules (user, 2026-11-24), one plan per target, then it pauses itself:
+#  - dynamic only: the text must say 動態, and name no 靜態/static, NAT/CGNAT,
+#    blind box;
+#  - SeedNet: annual-only plan <= $28.5/month, or a plan with monthly/
+#    quarterly/annual cycles whose cheapest cycle is <= $28.5/month;
+#  - Japan/USA: annual-only <= $40/month, or several cycles < $30/month
+#    (29.99), likely only with a promo code;
+#  - per month = today's total (price + setup fee, after a promo code) /
+#    the cycle's months; the cheapest cycle per month is bought;
+#  - promo codes posted on BOIL's channel or by staff are used (14 days);
+#    codes from ordinary group members are not.
 boil_autobuy:
   enabled: true
-  max_total: 342
-  billing_cycle: annually
-  reject_cycles: [monthly, quarterly, semiannually]
-  name_include: [seednet, seed net, 遠傳, 远传]
-  name_exclude: [nat, 靜態, 静态, static, 盲盒, lucky box, 福袋]
+  targets:
+    - {key: seednet, label: SeedNet, include: [seednet, seed net, 遠傳, 远传], annual_only_month: 28.5, any_cycle_month: 28.5}
+    - {key: jpus, label: 日本/美國, include: [日本, japan, 美國, 美国, usa], annual_only_month: 40, any_cycle_month: 29.99}
+  require_words: [動態, 动态, dynamic]
+  name_exclude: [nat, cgnat, 靜態, 静态, static, 盲盒, lucky box, 福袋]
+  short_cycles: [monthly, quarterly, semiannually]
+  max_total: 480
   sale_groups: [festive-offer]
   default_urls:
     - https://cloud.boil.network/store/festive-offer
@@ -290,10 +300,13 @@ providers:
     notify_only_events: [sale_category]
     # 2026-11-11: the 马年/蛇年 HiNet plans belong to the public A區 Taiwan
     # group, so a SeedNet plan may be listed straight on a Taiwan page.
-    # Every 2nd round (10 min) the 3 public Taiwan groups are read and only
-    # SeedNet cards kept (+432 requests/day); a listed one is public.
-    watch_groups: [taiwan-shared-bandwidth, taiwan-b-shared-bandwidth, taiwan-d-shared-bandwidth]
-    watch_keywords: [seednet, seed net, 遠傳, 远传]
+    # Every 2nd round (10 min) the public groups are read and only target
+    # cards kept; a listed one is public. 2026-11-24: + the new Taiwan group
+    # (SeedNet moved there) and Japan/USA for the buyer's 日本/美國 target
+    # (6 pages, +864 requests/day, ~1.4k/day in all).
+    watch_groups: [taiwan-home-broadband, taiwan-shared-bandwidth, taiwan-b-shared-bandwidth,
+                   taiwan-d-shared-bandwidth, japan-shared-bandwidth, usa-shared-bandwidth]
+    watch_keywords: [seednet, seed net, 遠傳, 远传, 日本, japan, 美國, 美国, usa]
     watch_every_rounds: 2
     feed_every_rounds: 3
     probe_ahead: 2

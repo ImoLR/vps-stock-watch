@@ -1,12 +1,20 @@
 """BOILCLOUD (cloud.boil.network) auto-buyer, driven by the BOIL monitors.
 
-Target (user, 2026-11-11, price rule 2026-11-24): one SeedNet (遠傳)
-annual-only plan, an independent dynamic IP VPS (not NAT, not static, not a
-blind box), at most $28.5 a month over the year ($342 for the year and due
-today). A plan that also sells monthly / quarterly / half-yearly is a
-regular plan, not the sale one, and is skipped. BOIL sells such holiday
-plans around Christmas, named after the zodiac year (2026 马年 HiNet; next
-one probably 羊年 SeedNet), or as Black Friday / other holiday items.
+Targets (user, 2026-11-11; rules of 2026-11-24): one plan of each kind,
+each a dynamic IP VPS (the text must say 動態; not static, NAT / CGNAT or a
+blind box):
+
+* SeedNet (遠傳): an annual-only plan at <= $28.5 a month, or a plan with
+  several cycles whose cheapest cycle comes to <= $28.5 a month;
+* Japan / USA: an annual-only plan at <= $40 a month, or a plan with
+  several cycles whose cheapest cycle comes to < $30 a month (probably only
+  with a promo code posted by BOIL).
+
+"Annual-only" = annually on offer and no monthly / quarterly / half-yearly
+cycle. The price per month is today's total (price + setup fee, after a
+promo code) over the cycle's months. BOIL sells such holiday plans around
+Black Friday, Christmas and the new year, named after the zodiac year (2026
+马年 HiNet; next one probably 羊年).
 
 Like the FAC buyer it does not watch the site by itself. The Telegram relay
 (a cloud.boil.network link posted on BOIL's channel or by BOIL's own
@@ -21,12 +29,14 @@ public page, logged out; it never opens the hidden page while logged in.
 
 The shop is plain WHMCS with no captcha, so this is plain HTTP (requests),
 no browser. Order: cart.php?a=add&pid=N (a store product link redirects
-straight to the configure page, with no pid in it) -> confproduct (billingcycle =
-annually, default options, no paid upgrades) -> checkout page (today's total
-and balance) -> submit with "apply credit" (the default). A short balance
+straight to the configure page, with no pid in it) -> confproduct (the
+cheapest cycle per month, default options, no paid upgrades) -> promo code
+on the cart page, if BOIL posted one -> checkout page (today's total and
+balance) -> submit with "apply credit" (the default). A short balance
 leaves an unpaid invoice: Telegram sends the pay link at once, the buyer
-tries to apply the balance, then reports. It stops after one order (marker
-file; resume from Telegram /autobuy).
+tries to apply the balance, then reports. Each kind is bought once (one
+marker file per kind); with every kind bought the buyer pauses (resume from
+Telegram /autobuy).
 """
 from __future__ import annotations
 
@@ -64,23 +74,47 @@ DEFAULTS: Dict[str, Any] = {
     "base_url": "https://cloud.boil.network/",
     "account_file": "data/boil_account.env",
     "cookie_file": "data/boil_cookies.json",
+    # Written once every kind is bought (pauses the buyer); each kind also
+    # gets its own marker, <stem>_<key><suffix>.
     "marker_file": "data/boil_autobuy_done.json",
+    "promo_file": "data/autobuy/boil_promo.json",
     "trigger_dir": "data/autobuy/boil_triggers",
-    # Matched against the product name + description (not the group
-    # heading: every Taiwan heading lists "HiNet/SeedNet/Kbro").
-    "name_include": ["seednet", "seed net", "遠傳", "远传"],
-    # Whole words: NAT, static IP, random blind boxes.
-    "name_exclude": ["nat", "靜態", "静态", "static", "盲盒", "lucky box", "福袋"],
-    "billing_cycle": "annually",
-    # A plan offering any of these is not an annual-only sale plan.
-    "reject_cycles": ["monthly", "quarterly", "semiannually"],
-    # Both the annual price and today's total (with any setup fee).
-    "max_total": 342.0,
-    "hostname": "seednet",
-    # Sale groups worth watching without a SeedNet word in the post.
+    # What to buy, first match wins. ``include`` is matched against the
+    # product name + description (not the group heading: every Taiwan
+    # heading lists "HiNet/SeedNet/Kbro"). Caps are USD per month: one for
+    # annual-only plans, one for plans that also sell shorter cycles.
+    "targets": [
+        {"key": "seednet", "label": "SeedNet", "include": ["seednet", "seed net", "遠傳", "远传"],
+         "annual_only_month": 28.5, "any_cycle_month": 28.5},
+        {"key": "jpus", "label": "日本/美國", "include": ["日本", "japan", "美國", "美国", "usa"],
+         "annual_only_month": 40.0, "any_cycle_month": 29.99},
+    ],
+    # Every target must say it is dynamic ...
+    "require_words": ["動態", "动态", "dynamic"],
+    # ... and name none of these (Latin ones as whole words): NAT, CGNAT,
+    # static IP (also "靜態IPv4・動態IPv6"), random blind boxes.
+    "name_exclude": ["nat", "cgnat", "靜態", "静态", "static", "盲盒", "lucky box", "福袋"],
+    # A plan offering any of these is not an annual-only plan.
+    "short_cycles": ["monthly", "quarterly", "semiannually"],
+    # Hard ceiling on today's total, whatever the rules allow.
+    "max_total": 480.0,
+    # Per product: at most this many cycle / promo code tries.
+    "max_tries": 4,
+    "hostname": "boilvps",
+    # Sale groups worth watching without a target word in the post.
     "sale_groups": ["festive-offer"],
-    # A post about SeedNet with a sale word but no store link arms these.
+    # A target sale post with a sale word but no store link arms these.
     "default_urls": ["https://cloud.boil.network/store/festive-offer"],
+    # A promo code from BOIL (channel or staff) is tried on these groups.
+    "promo_urls": [
+        "https://cloud.boil.network/store/taiwan-home-broadband",
+        "https://cloud.boil.network/store/taiwan-shared-bandwidth",
+        "https://cloud.boil.network/store/taiwan-b-shared-bandwidth",
+        "https://cloud.boil.network/store/taiwan-d-shared-bandwidth",
+        "https://cloud.boil.network/store/japan-shared-bandwidth",
+        "https://cloud.boil.network/store/usa-shared-bandwidth",
+    ],
+    "promo_days": 14,
     "sale_words": [
         "年付", "年繳", "年缴", "聖誕", "圣诞", "節日", "节日", "活動", "活动", "上架", "上新",
         "補貨", "补货", "限量", "優惠", "优惠", "黑五", "週年", "周年", "開賣", "开卖", "羊年",
@@ -108,6 +142,13 @@ DEFAULTS: Dict[str, Any] = {
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+)
+CYCLE_MONTHS = {"monthly": 1, "quarterly": 3, "semiannually": 6, "annually": 12, "biennially": 24, "triennially": 36}
+# "優惠碼：XMAS2026", "promo code BF50" ... (Telegram raw text, no markup).
+PROMO = re.compile(
+    r"(?:優惠碼|优惠码|折扣碼|折扣码|優惠代碼|优惠代码|促銷代碼|促销代码|促銷碼|促销码|promo\s*code|coupon(?:\s*code)?)"
+    r"\s*(?:[:：是为為]|is)?\s*[「『\"'`“]?([A-Za-z0-9][A-Za-z0-9_-]{2,31})(?![A-Za-z0-9_-])",
+    re.I,
 )
 OUT_OF_STOCK = re.compile(r"缺貨|缺货|售罄|out of stock", re.I)
 PAID = re.compile(r"\b(paid)\b|已付款", re.I)
@@ -159,6 +200,64 @@ def mentions(text: str, words: Iterable[str]) -> bool:
     return any(word.casefold() in lowered for word in words)
 
 
+def match_target(text: str, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The first target whose words ``text`` names, if it is dynamic and clean."""
+    if not mentions(text, cfg["require_words"]):
+        return None
+    for target in cfg["targets"]:
+        if text_matches(text, target["include"], cfg["name_exclude"]):
+            return target
+    return None
+
+
+def target_words(cfg: Dict[str, Any]) -> List[str]:
+    return [str(word) for target in cfg["targets"] for word in target["include"]]
+
+
+def cycle_prices(cycles: Dict[str, str]) -> Dict[str, float]:
+    """Listed first payment (price + setup fee) per known cycle, from labels
+    like "$288.00 USD 年繳 + $3.00 USD 設定費"."""
+    prices: Dict[str, float] = {}
+    for value, label in cycles.items():
+        amounts = [float(v.replace(",", "")) for v in re.findall(r"\$\s*(-?\d[\d,]*(?:\.\d+)?)", label or "")]
+        if value in CYCLE_MONTHS and amounts and amounts[0] >= 0:
+            prices[value] = sum(amounts)
+    return prices
+
+
+def plan_cycles(cycles: Dict[str, str], target: Dict[str, Any], short_cycles: Iterable[str],
+                promo: bool) -> Tuple[str, float, List[Tuple[str, float]]]:
+    """(rule, cap per month, [(cycle, listed per month)] worth trying, cheapest first).
+
+    Annual-only (annually and no short cycle): only annually, at the
+    annual-only cap. Otherwise any cycle at the other cap, cheapest per month
+    first (a tie goes to the longer cycle). Without a promo code a cycle
+    whose listed price is over the cap is not tried.
+    """
+    prices = cycle_prices(cycles)
+    if "annually" in prices and not any(value in cycles for value in short_cycles):
+        rule, cap, pool = "只有年付", float(target["annual_only_month"]), ["annually"]
+    else:
+        rule, cap, pool = "多周期", float(target["any_cycle_month"]), list(prices)
+    ranked = sorted(
+        ((value, prices[value] / CYCLE_MONTHS[value]) for value in pool if value in prices),
+        key=lambda item: (round(item[1], 4), -CYCLE_MONTHS[item[0]]),
+    )
+    if not promo:
+        ranked = [item for item in ranked if item[1] <= cap + 0.005]
+    return rule, cap, ranked
+
+
+def promo_codes(text: str) -> List[str]:
+    """Promo codes named in a post, in order, without repeats."""
+    found: List[str] = []
+    for match in PROMO.finditer(text or ""):
+        code = match.group(1)
+        if code.lower() not in ("http", "https", "www") and code not in found:
+            found.append(code)
+    return found
+
+
 def classify_url(url: str, base_url: str) -> Tuple[str, Optional[str]]:
     """("group", slug) | ("product", url) | ("pid", pid) | ("other", None)."""
     parsed = urlparse(url)
@@ -187,14 +286,20 @@ def trigger_targets(trigger: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
     """The links worth arming for one trigger (as canonical URLs).
 
     Product links are always tried (one check shows the name). A group link
-    is armed when the post talks about SeedNet, or it is a sale group posted
+    is armed when the post talks about a target, or it is a sale group posted
     on Telegram (the site monitor's trigger carries the cards' text); a
-    SeedNet sale post without a store link arms the default sale group.
+    public group the site monitor reads arms only for a card that is a
+    target. A target sale post without a store link arms the default sale
+    group; a BOIL post with a promo code arms the regular groups too.
     Maintenance notices and regular HKT restocks arm nothing.
     """
     base = str(cfg["base_url"])
     text = str(trigger.get("text") or "")
-    about_target = mentions(text, cfg["name_include"])
+    source = str(trigger.get("source") or "")
+    about_target = mentions(text, target_words(cfg))
+    codes = promo_codes(text) if source.startswith("tg-") else []
+    if trigger.get("promo") and not codes:
+        return []  # a promo-word post with no code in it
     targets: List[str] = []
     other = False
     for url in trigger.get("urls") or []:
@@ -204,19 +309,37 @@ def trigger_targets(trigger: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
             target = urljoin(base, "cart.php?a=add&pid=%s" % value)
         elif kind == "product":
             target = value
-        elif kind == "group" and (
-            about_target
-            # The site monitor sends the group's card texts: no SeedNet, no arming.
-            or (value in cfg["sale_groups"] and trigger.get("source") != "boilcloud_sale")
-        ):
+        elif kind == "group" and source == "boilcloud_sale":
+            # The site monitor sends the card texts (a public group: one card).
+            if (about_target if value in cfg["sale_groups"] else match_target(text, cfg)):
+                target = urljoin(base, "store/%s" % value)
+        elif kind == "group" and (about_target or value in cfg["sale_groups"]):
             target = urljoin(base, "store/%s" % value)
         elif kind == "other":
             other = True
         if target and target not in targets:
             targets.append(target)
-    if not targets and (other or not trigger.get("urls")) and about_target and mentions(text, cfg["sale_words"]):
+    if trigger.get("promo"):
+        targets = []  # only the placeholder link the relay adds
+    elif not targets and (other or not trigger.get("urls")) and about_target and mentions(text, cfg["sale_words"]):
         targets.extend(url for url in cfg["default_urls"] if url not in targets)
+    if codes:
+        targets.extend(url for url in cfg["promo_urls"] if url not in targets)
     return targets
+
+
+def quiet_target(url: str, trigger: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
+    """Regular groups armed by the site monitor or a promo code: misses are
+    logged, not sent (they would repeat for every regular plan)."""
+    base = str(cfg["base_url"])
+    kind, value = classify_url(url, base)
+    if kind != "group" or value in cfg["sale_groups"]:
+        return False
+    if trigger.get("source") == "boilcloud_sale":
+        return True
+    own = {urljoin(base, "store/%s" % classify_url(str(link), base)[1])
+           for link in trigger.get("urls") or [] if classify_url(str(link), base)[0] == "group"}
+    return url not in own
 
 
 def group_listed(page_html: str, slug: str, base_url: str) -> bool:
@@ -242,8 +365,9 @@ def random_password() -> str:
     return core + secrets.choice("!#%+") + secrets.choice(string.digits)
 
 
-def conf_form(page_html: str, cycle: str, hostname: str, password: str) -> Tuple[Optional[Dict[str, str]], Dict[str, Any]]:
-    """Form data for ``frmConfigureProduct`` with ``cycle`` and default options.
+def conf_form(page_html: str, cycle: Optional[str], hostname: str, password: str) -> Tuple[Optional[Dict[str, str]], Dict[str, Any]]:
+    """Form data for ``frmConfigureProduct`` with ``cycle`` (None: the page's
+    own choice, set by the caller later) and default options.
 
     Returns (data or None, info). ``info`` has the product name, its
     description, the cycles on offer and why it can't be configured.
@@ -273,7 +397,7 @@ def conf_form(page_html: str, cycle: str, hostname: str, password: str) -> Tuple
             ]
             if name == "billingcycle":
                 info["cycles"] = dict(options)
-                data[name] = cycle
+                data[name] = cycle or (options[0][0] if options else "")
                 continue
             chosen = node.select_one("option[selected]")
             value = str(chosen.get("value") or "") if chosen else (options[0][0] if options else "")
@@ -291,7 +415,7 @@ def conf_form(page_html: str, cycle: str, hostname: str, password: str) -> Tuple
     if "billingcycle" not in data:
         info["why"] = "页面没有付款周期选项"
         return None, info
-    if cycle not in info["cycles"]:
+    if cycle is not None and cycle not in info["cycles"]:
         info["why"] = "没有%s周期（只有 %s）" % (cycle, "、".join(info["cycles"].values()) or "?")
         return None, info
     if "hostname" in data and not data["hostname"]:
@@ -387,12 +511,21 @@ class BoilAutoBuyer:
         self.cfg = cfg
         self.args = args
         self.base_url = str(cfg["base_url"])
-        self.include = [str(v) for v in cfg["name_include"]]
-        self.exclude = [str(v) for v in cfg["name_exclude"]]
-        self.cycle = str(cfg["billing_cycle"])
-        self.reject_cycles = [str(v) for v in cfg["reject_cycles"]]
+        self.targets = list(cfg["targets"])
+        self.short_cycles = [str(v) for v in cfg["short_cycles"]]
         self.max_total = float(cfg["max_total"])
+        # One-off tests: this cycle only (public test items may lack annually).
+        self.force_cycle: Optional[str] = None
         self.marker_path = Path(str(cfg["marker_file"]))
+        self.promo_path = Path(str(cfg["promo_file"]))
+        self.promos: List[Dict[str, Any]] = self._load_promos()
+        # Targets already bought (key -> marker), from their marker files.
+        self.done: Dict[str, Dict[str, Any]] = {}
+        for target in self.targets:
+            try:
+                self.done[target["key"]] = json.loads(self.target_marker(target["key"]).read_text("utf-8"))
+            except (OSError, ValueError):
+                pass
         self.trigger_dir = str(cfg["trigger_dir"])
         self.cookie_path = Path(str(cfg["cookie_file"]))
         account_file = Path(str(cfg["account_file"]))
@@ -412,8 +545,11 @@ class BoilAutoBuyer:
         self.armed: Dict[str, Dict[str, Any]] = {}
         self.failures: Dict[str, int] = {}
         self.notified: set = set()
-        # PIDs / product links that will never match (name, cycles, over budget).
+        # PIDs / product links that will never match (name, no cycles) ...
         self.dropped: set = set()
+        # ... or not at this price (tried again with a new promo code).
+        self.price_dropped: set = set()
+        self.spacing = float(cfg["order_spacing_seconds"])
         self.cart_dirty = True
         self.last_page_at = float("-inf")
         self.last_login_check = float("-inf")
@@ -421,9 +557,11 @@ class BoilAutoBuyer:
         self.heartbeat = Heartbeat(
             STATUS_DIR,
             NAME,
-            "BOIL SeedNet 年付",
-            "名称/说明含 SeedNet/遠傳，非 NAT/静态/盲盒，只有年付（没有月/季/半年付），"
-            "年付价和今日总价 ≤ $%g（每月 $%.2f），余额付款" % (self.max_total, self.max_total / 12),
+            "BOIL SeedNet / 日本美國",
+            "动态（写明動態，非静态/NAT/CGNAT/盲盒）各买一台：%s；按今日总价折合每月，"
+            "有官方优惠码就用，余额付款" % "；".join(
+                "%s 只有年付 ≤ $%g/月、多周期 ≤ $%g/月" % (t["label"], t["annual_only_month"], t["any_cycle_month"])
+                for t in self.targets),
             float(cfg["fast_poll_seconds"]),
         )
         self.switch = Switch(Control(STATUS_DIR, NAME), self.marker_path, self.beat)
@@ -451,6 +589,47 @@ class BoilAutoBuyer:
         tmp.write_text(json.dumps(items), "utf-8")
         os.chmod(tmp, 0o600)
         tmp.replace(self.cookie_path)
+
+    def target_marker(self, key: str) -> Path:
+        return self.marker_path.with_name("%s_%s%s" % (self.marker_path.stem, key, self.marker_path.suffix))
+
+    def all_done(self) -> bool:
+        return all(target["key"] in self.done for target in self.targets)
+
+    def done_summary(self) -> str:
+        return "；".join(
+            "%s：%s %s 账单 #%s %s" % (target["label"], d.get("product"), d.get("plan"), d.get("invoice"), d.get("invoice_status"))
+            for target in self.targets for d in [self.done.get(target["key"])] if d
+        )
+
+    def _load_promos(self) -> List[Dict[str, Any]]:
+        try:
+            items = json.loads(self.promo_path.read_text("utf-8"))
+            return [item for item in items if item.get("code")]
+        except (OSError, ValueError, AttributeError, TypeError):
+            return []
+
+    def active_codes(self) -> List[str]:
+        cutoff = time.time() - float(self.cfg["promo_days"]) * 86400
+        return [str(item["code"]) for item in self.promos if float(item.get("at") or 0) >= cutoff][:3]
+
+    def learn_codes(self, codes: Iterable[str], source: str) -> None:
+        """Remember BOIL's promo codes (newest first); a new one re-opens price misses."""
+        known = {str(item["code"]) for item in self.promos}
+        new = [code for code in codes if code not in known]
+        if not new:
+            return
+        self.promos = [{"code": code, "at": time.time(), "source": source} for code in reversed(new)] + self.promos
+        self.promos = self.promos[:10]
+        try:
+            self.promo_path.parent.mkdir(parents=True, exist_ok=True)
+            self.promo_path.write_text(json.dumps(self.promos, ensure_ascii=False, indent=2), "utf-8")
+        except OSError:
+            LOG.exception("cannot save promo codes")
+        self.price_dropped.clear()
+        LOG.info("promo codes from %s: %s", source, new)
+        self.notify("🎟 <b>BOIL 优惠码</b> %s\n来自 %s。会用它再查一遍台灣/日本/美國分组里的动态 SeedNet / 日美商品，"
+                    "折合每月够低就买；没买到不再逐个通知。" % (html.escape("、".join(new)), html.escape(source)))
 
     def beat(self, **values: Any) -> None:
         # One-off test/login runs must not overwrite the service's status.
@@ -533,101 +712,133 @@ class BoilAutoBuyer:
         return parse_usd(match.group(1)) if match else None
 
     # -- one product ---------------------------------------------------------
-    def over_budget(self, pid: str, name: str, what: str, amount: float) -> str:
+    def miss(self, pid: str, name: str, target: Dict[str, Any], rule: str, cap: float,
+             why: str, quiet: bool) -> str:
+        """Not at this price: tell the user once (unless quiet), keep for a new code."""
+        LOG.info("pid %s (%s) misses %s %s <= $%g/month: %s", pid, name, target["label"], rule, cap, why)
         key = "price:%s" % pid
-        if key not in self.notified:
+        if not quiet and key not in self.notified:
             self.notified.add(key)
             self.notify(
-                "💸 <b>BOIL 抢购：%s 超出预算，没有下单</b>\n%s $%.2f &gt; 上限 $%g（每月 $%.2f）\n%s"
-                % (html.escape(name), what, amount, self.max_total, self.max_total / 12,
+                "💸 <b>BOIL 抢购：%s 价格不符，没有下单</b>\n%s · %s：折合每月要 ≤ $%g\n%s\n%s"
+                % (html.escape(name), html.escape(target["label"]), rule, cap, html.escape(why),
                    html.escape(cart_link(self.base_url, pid)))
             )
-        self.dropped.add(pid)
+        self.price_dropped.add(pid)
         self.empty_cart()
         return OrderResult.DROP
 
-    def order(self, pid: str, mode: str = "live") -> str:
-        """Order ``pid``: a PID or a store product link. ``mode``: live, dry
-        (stop before checkout) or tos (submit checkout without the TOS box:
-        WHMCS refuses, no order)."""
-        fast = float(self.cfg["order_spacing_seconds"])
+    def add_to_cart(self, pid: str) -> Optional[requests.Response]:
+        """Put ``pid`` in an empty cart; its configure page, or None (not orderable)."""
         if self.cart_dirty:
             self.empty_cart()
         self.cart_dirty = True
-        response = self.request("GET", cart_link(self.base_url, pid), spacing=fast)
-        if "a=confproduct" not in response.url:
-            if OUT_OF_STOCK.search(BeautifulSoup(response.text, "lxml").get_text(" ", strip=True)):
-                LOG.info("pid %s out of stock", pid)
-            else:
-                LOG.info("pid %s: no configure page (%s)", pid, response.url)
+        response = self.request("GET", cart_link(self.base_url, pid), spacing=self.spacing)
+        if "a=confproduct" in response.url:
+            return response
+        if OUT_OF_STOCK.search(BeautifulSoup(response.text, "lxml").get_text(" ", strip=True)):
+            LOG.info("pid %s out of stock", pid)
+        else:
+            LOG.info("pid %s: no configure page (%s)", pid, response.url)
+        return None
+
+    def apply_promo(self, code: str, token: str) -> None:
+        reply = self.request("POST", "cart.php?a=view", spacing=self.spacing,
+                             data={"token": token, "promocode": code, "validatepromo": "true"})
+        # "您填寫的優惠代碼並不存在。" comes as a warning; hidden alerts are page furniture.
+        for node in BeautifulSoup(reply.text, "lxml").select(".alert-warning, .alert-danger, .alert-success"):
+            if "w-hidden" not in (node.get("class") or []):
+                LOG.info("promo code %s: %s", code, node.get_text(" ", strip=True)[:200])
+
+    def order(self, pid: str, mode: str = "live", quiet: bool = False) -> str:
+        """Order ``pid`` (a PID or a store product link) if it is a target at
+        its price. ``mode``: live, dry (stop before checkout) or tos (submit
+        checkout without the TOS box: WHMCS refuses, no order). ``quiet``:
+        misses are only logged, and pages keep the normal spacing."""
+        self.spacing = float(self.cfg["page_spacing_seconds" if quiet else "order_spacing_seconds"])
+        response = self.add_to_cart(pid)
+        if response is None:
             return OrderResult.WAIT
-        data, info = conf_form(response.text, self.cycle, str(self.cfg["hostname"]), random_password())
+        _, info = conf_form(response.text, None, str(self.cfg["hostname"]), random_password())
         name = info["name"] or "PID %s" % pid
-        if not text_matches("%s %s" % (info["name"], info["description"]), self.include, self.exclude):
-            LOG.info("pid %s (%s) is not the target", pid, name)
+        target = match_target("%s %s" % (info["name"], info["description"]), self.cfg)
+        if target is None or target["key"] in self.done:
+            LOG.info("pid %s (%s) is not a target%s", pid, name, " still to buy" if target else "")
             self.dropped.add(pid)
             self.empty_cart()
             return OrderResult.DROP
-        if data is None:
+        if not info["cycles"]:
             self.dropped.add(pid)
             self.empty_cart()
-            return self.order_failed(pid, name, info["why"], final=True)
-        short = [label for value, label in info["cycles"].items() if value in self.reject_cycles]
-        if short:
-            key = "cycles:%s" % pid
-            if key not in self.notified:
-                self.notified.add(key)
-                self.notify(
-                    "ℹ️ <b>BOIL 抢购：%s 不是只有年付，没有下单</b>\n还有：%s\n%s"
-                    % (html.escape(name), html.escape("、".join(short)),
-                       html.escape(cart_link(self.base_url, pid)))
-                )
-            self.dropped.add(pid)
-            self.empty_cart()
-            return OrderResult.DROP
-        annual = parse_usd(info["cycles"].get(self.cycle))
-        if annual is not None and annual > self.max_total + 0.005:
-            return self.over_budget(pid, name, "年付价", annual)
-        index = parse_qs(urlparse(response.url).query).get("i", [data.get("i", "0")])[0]
-        data["i"] = data.get("i") or index
-        reply = self.request("POST", "cart.php?a=confproduct", spacing=fast, data=dict(data, ajax="1"))
-        errors = BeautifulSoup(reply.text, "lxml").get_text(" ", strip=True)
-        if errors:
-            self.empty_cart()
-            return self.order_failed(pid, name, "配置被拒：%s" % errors[:200])
-        page = self.request("GET", "cart.php?a=checkout", spacing=fast)
-        form, totals = checkout_form(page.text, accept_tos=(mode != "tos"))
-        total, balance = totals["total"], totals["balance"]
-        LOG.info("pid %s %s: total %s, balance %s", pid, name, total, balance)
-        if form is None or total is None:
-            self.empty_cart()
-            return self.order_failed(pid, name, totals["why"] or "读不到今日总价")
-        if form.get("custtype") != "existing" or not form.get("account_id"):
-            # Logged out: checkout would try to sign up a new customer.
-            LOG.warning("checkout is not for the logged-in account; logging in again")
-            self.empty_cart()
-            self.last_login_check = float("-inf")
-            self.ensure_login()
-            return OrderResult.WAIT
-        if total > self.max_total + 0.005:
-            return self.over_budget(pid, name, "今日总价", total)
-        if mode == "dry":
-            print("DRY RUN ok: %s, %s, total $%.2f, balance %s, checkout fields %s"
-                  % (name, info["cycles"].get(self.cycle), total, balance, sorted(form)))
-            self.empty_cart()
-            return OrderResult.WAIT
-        if mode == "tos":
-            result = self.request("POST", "cart.php?a=checkout", spacing=fast, data=form)
-            refused = "a=checkout" in result.url and invoice_id(result.url, result.text) is None
-            error = BeautifulSoup(result.text, "lxml").select_one(".checkout-error-feedback, .alert-danger")
-            print("TOS probe: refused=%s url=%s error=%r" % (
-                refused, result.url, error.get_text(" ", strip=True)[:200] if error else None))
-            self.empty_cart()
-            return OrderResult.WAIT
-        return self.checkout(pid, name, info["cycles"].get(self.cycle, self.cycle), form, total, balance)
+            return self.order_failed(pid, name, info["why"] or "页面没有付款周期选项", final=True)
+        codes = self.active_codes()
+        rule, cap, ranked = plan_cycles(info["cycles"], target, self.short_cycles, bool(codes))
+        if codes:
+            # A code taking off more than two thirds is not worth the requests.
+            ranked = [item for item in ranked if item[1] <= 3 * cap]
+        if self.force_cycle:
+            ranked = [(self.force_cycle, 0.0)] if self.force_cycle in info["cycles"] else []
+        if not ranked:
+            cheapest = plan_cycles(info["cycles"], target, self.short_cycles, True)[2]
+            why = ("最便宜：%s，折合每月 $%.2f" % (info["cycles"][cheapest[0][0]], cheapest[0][1])
+                   if cheapest else "没有可选的周期（%s）" % "、".join(info["cycles"].values()))
+            return self.miss(pid, name, target, rule, cap, why, quiet)
+        tries = [(cycle, code) for code in (codes or [None]) for cycle, _ in ranked][:int(self.cfg["max_tries"])]
+        misses: List[str] = []
+        for index, (cycle, code) in enumerate(tries):
+            if index:
+                response = self.add_to_cart(pid)
+                if response is None:
+                    return OrderResult.WAIT
+            data, _ = conf_form(response.text, cycle, str(self.cfg["hostname"]), random_password())
+            if data is None:
+                continue
+            data["i"] = data.get("i") or parse_qs(urlparse(response.url).query).get("i", ["0"])[0]
+            reply = self.request("POST", "cart.php?a=confproduct", spacing=self.spacing, data=dict(data, ajax="1"))
+            errors = BeautifulSoup(reply.text, "lxml").get_text(" ", strip=True)
+            if errors:
+                self.empty_cart()
+                return self.order_failed(pid, name, "配置被拒：%s" % errors[:200])
+            if code:
+                self.apply_promo(code, data.get("token", ""))
+            page = self.request("GET", "cart.php?a=checkout", spacing=self.spacing)
+            form, totals = checkout_form(page.text, accept_tos=(mode != "tos"))
+            total, balance = totals["total"], totals["balance"]
+            label = info["cycles"].get(cycle, cycle) + (" · 优惠码 %s" % code if code else "")
+            LOG.info("pid %s %s [%s]: total %s, balance %s", pid, name, label, total, balance)
+            if form is None or total is None:
+                self.empty_cart()
+                return self.order_failed(pid, name, totals["why"] or "读不到今日总价")
+            if form.get("custtype") != "existing" or not form.get("account_id"):
+                # Logged out: checkout would try to sign up a new customer.
+                LOG.warning("checkout is not for the logged-in account; logging in again")
+                self.empty_cart()
+                self.last_login_check = float("-inf")
+                self.ensure_login()
+                return OrderResult.WAIT
+            per_month = total / CYCLE_MONTHS.get(cycle, 1)
+            if (per_month > cap + 0.005 and not self.force_cycle) or total > self.max_total + 0.005:
+                misses.append("%s：今日总价 $%.2f，折合每月 $%.2f" % (label, total, per_month))
+                self.empty_cart()
+                continue
+            if mode == "dry":
+                print("DRY RUN ok: %s, %s, total $%.2f ($%.2f/month), balance %s, checkout fields %s"
+                      % (name, label, total, per_month, balance, sorted(form)))
+                self.empty_cart()
+                return OrderResult.WAIT
+            if mode == "tos":
+                result = self.request("POST", "cart.php?a=checkout", spacing=self.spacing, data=form)
+                refused = "a=checkout" in result.url and invoice_id(result.url, result.text) is None
+                error = BeautifulSoup(result.text, "lxml").select_one(".checkout-error-feedback, .alert-danger")
+                print("TOS probe: refused=%s url=%s error=%r" % (
+                    refused, result.url, error.get_text(" ", strip=True)[:200] if error else None))
+                self.empty_cart()
+                return OrderResult.WAIT
+            return self.checkout(pid, name, label, form, total, balance, target)
+        return self.miss(pid, name, target, rule, cap, "；".join(misses) or "周期选不上", quiet)
 
     def checkout(self, pid: str, name: str, cycle_label: str, form: Dict[str, str],
-                 total: float, balance: Optional[float]) -> str:
+                 total: float, balance: Optional[float], target: Dict[str, Any]) -> str:
         known = self.newest_invoice()
         self.beat(state="ordering", detail="正在下单 %s" % name)
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -666,22 +877,24 @@ class BoilAutoBuyer:
             why = "结账后没有找到新账单（%s）" % (response.url if response is not None else "请求没有回应")
             return self.order_failed(pid, name, why)
         self.cart_dirty = False
-        return self.record_order(pid, name, cycle_label, invoice, total, balance)
+        return self.record_order(pid, name, cycle_label, invoice, total, balance, target)
 
     def record_order(self, pid: str, name: str, cycle_label: str, invoice: str,
-                     total: float, balance: Optional[float]) -> str:
+                     total: float, balance: Optional[float], target: Dict[str, Any]) -> str:
         invoice_url = urljoin(self.base_url, "viewinvoice.php?id=%s" % invoice)
         status = invoice_status(self.request("GET", invoice_url).text)
         result = {
-            "at": _now_iso(), "product": name, "pid": pid, "plan": cycle_label,
+            "at": _now_iso(), "target": target["key"], "product": name, "pid": pid, "plan": cycle_label,
             "invoice": invoice, "invoice_url": invoice_url, "invoice_status": status,
             "total": total, "balance_before": balance,
         }
         # The order exists: write the marker before anything else can fail.
-        self.marker_path.parent.mkdir(parents=True, exist_ok=True)
-        self.marker_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        marker = self.target_marker(target["key"])
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.done[target["key"]] = result
         LOG.info("order created: %s", result)
-        title = "%s · %s" % (html.escape(name), html.escape(cycle_label))
+        title = "%s · %s · %s" % (html.escape(target["label"]), html.escape(name), html.escape(cycle_label))
         if status != "Paid":
             self.notify(
                 "🛒 <b>BOIL 已下单，但还没付清</b>\n%s\n账单 #%s：%s，今日总价 $%.2f\n"
@@ -691,7 +904,7 @@ class BoilAutoBuyer:
             why = self.pay_with_credit(invoice_url)
             status = invoice_status(self.request("GET", invoice_url).text)
             result.update(invoice_status=status, pay_attempt=why)
-            self.marker_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            marker.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         else:
             why = ""
         if status == "Paid":
@@ -702,7 +915,14 @@ class BoilAutoBuyer:
                 "🚨 <b>BOIL 余额付款没成功，请马上手动付款</b>\n%s\n账单 #%s：%s\n原因：%s\n%s"
                 % (title, invoice, html.escape(status), html.escape(why), html.escape(invoice_url))
             )
-        self.switch.bought("%s %s 账单 #%s %s" % (name, cycle_label, invoice, status))
+        left = [t["label"] for t in self.targets if t["key"] not in self.done]
+        if left:
+            self.notify("👉 BOIL 抢购继续等：%s" % html.escape("、".join(left)))
+            self.beat(result=self.done_summary())
+        else:
+            self.marker_path.write_text(json.dumps(
+                {"at": _now_iso(), "bought": self.done}, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.switch.bought(self.done_summary())
         return OrderResult.BOUGHT
 
     def pay_with_credit(self, invoice_url: str) -> str:
@@ -739,46 +959,66 @@ class BoilAutoBuyer:
         return OrderResult.DROP if give_up else OrderResult.WAIT
 
     # -- armed links -----------------------------------------------------------
-    def attempt(self, url: str) -> str:
+    def attempt(self, url: str, quiet: bool = False) -> str:
         kind, value = classify_url(url, self.base_url)
         if kind == "group" and value:
             page = self.request("GET", url)
             if "/store/%s" % value not in unquote(page.url):
                 return OrderResult.WAIT
             cards = self.parser.parse_category(page.text, page.url, value)
-            matching = [
-                card for card in cards
-                if text_matches("%s %s" % (card.name, card.metadata.get("description") or ""),
-                                self.include, self.exclude)
-            ]
+            order = {target["key"]: index for index, target in enumerate(self.targets)}
+            matching = []
+            for card in cards:
+                target = match_target("%s %s" % (card.name, card.metadata.get("description") or ""), self.cfg)
+                if target is not None and target["key"] not in self.done:
+                    # Targets in config order; annual cards (likely annual-only) first.
+                    matching.append(((order[target["key"]], card.billing_cycle != "annually"), card))
+            matching = [card for _, card in sorted(matching, key=lambda item: item[0])]
             LOG.info("group %s: %d cards, %d matching", value, len(cards), len(matching))
+            bought = False
+            pending = False
             for card in matching:
-                if (
-                    card.available is False
-                    or card.product_id in self.dropped
-                    or self.failures.get(card.product_id, 0) >= int(self.cfg["max_order_failures"])
-                ):
+                if card.product_id in self.dropped or card.product_id in self.price_dropped:
                     continue
-                if self.order(card.product_id) == OrderResult.BOUGHT:
-                    return OrderResult.BOUGHT
-            return OrderResult.WAIT
+                if self.failures.get(card.product_id, 0) >= int(self.cfg["max_order_failures"]):
+                    continue
+                if card.available is False:
+                    # Sold out: wait for it, unless only a monitor or code armed this.
+                    pending = pending or not quiet
+                    continue
+                result = self.order(card.product_id, quiet=quiet)
+                if result == OrderResult.BOUGHT:
+                    bought = True
+                    if self.all_done():
+                        break
+                elif result == OrderResult.WAIT:
+                    pending = True
+            if bought:
+                return OrderResult.BOUGHT
+            if value in self.cfg["sale_groups"] or pending:
+                return OrderResult.WAIT
+            return OrderResult.DROP  # a regular group with nothing left to try
         if kind == "pid" and value:
             url = value
-        if kind not in ("pid", "product") or url in self.dropped:
+        if kind not in ("pid", "product") or url in self.dropped or url in self.price_dropped:
             return OrderResult.DROP
-        return self.order(url)
+        return self.order(url, quiet=quiet)
 
-    def arm(self, urls: Iterable[str], source: str, public: bool) -> None:
+    def arm(self, urls: Iterable[str], source: str, public: bool, quiet: Iterable[str] = ()) -> None:
         now = time.monotonic()
         until = now + float(self.cfg["arm_minutes"]) * 60
+        quiet = set(quiet)
         new = []
         for url in urls:
             entry = self.armed.get(url)
             if entry is None:
-                self.armed[url] = {"since": now, "until": until, "public": public, "next": now, "hidden_seen": None}
+                self.armed[url] = {"since": now, "until": until, "public": public, "next": now,
+                                   "hidden_seen": None, "quiet": url in quiet}
                 new.append(url)
             else:
                 entry["until"] = max(entry["until"], until)
+                if url not in quiet:
+                    entry["quiet"] = False
                 if public and not entry["public"]:
                     self.make_public(url, "TG 已发布" if source.startswith("tg-") else "已出现在商城菜单")
         if new:
@@ -839,7 +1079,7 @@ class BoilAutoBuyer:
                         entry["next"] = time.monotonic() + float(self.cfg["hidden_poll_seconds"])
                     continue
                 self.beat(state="watching", detail="检查 %s" % url)
-                result = self.attempt(url)
+                result = self.attempt(url, quiet=bool(entry.get("quiet")))
             except BlockedError as exc:
                 self.notify("⛔ <b>BOIL 抢购：疑似被网站限流</b>\n%s\n暂停 30 分钟。" % html.escape(str(exc)))
                 for item in self.armed.values():
@@ -852,7 +1092,7 @@ class BoilAutoBuyer:
                     self.notify("⚠️ <b>BOIL 抢购出错</b>（会重试）\n%s\n%s" % (
                         html.escape(url), html.escape(str(exc).splitlines()[0][:300] if str(exc) else type(exc).__name__)))
                 self.failures[url] = self.failures.get(url, 0) + 1
-            if result == OrderResult.BOUGHT:
+            if result == OrderResult.BOUGHT and self.all_done():
                 self.armed.clear()
                 return True
             if result == OrderResult.DROP:
@@ -862,11 +1102,12 @@ class BoilAutoBuyer:
         return False
 
     def idle_detail(self) -> str:
+        left = "、".join(t["label"] for t in self.targets if t["key"] not in self.done)
         if self.armed:
             return "已触发，正在盯 %d 个链接：%s" % (len(self.armed), "、".join(
                 url if entry["public"] else "%s（未公开，只看菜单）" % url
                 for url, entry in self.armed.items()))
-        return "待命：等 BOIL TG 频道/官方账号发链接，或 festive-offer 上架"
+        return "待命（还要买：%s）：等 BOIL TG 频道/官方账号发链接或优惠码，festive-offer 上架，或公开分组上货" % left
 
     def run(self) -> int:
         signal.signal(signal.SIGTERM, self._on_signal)
@@ -881,11 +1122,21 @@ class BoilAutoBuyer:
                     self.armed.clear()
                     continue
                 if self.switch.rearm():
-                    LOG.info("resumed after a purchase; old marker archived")
+                    for key in list(self.done):
+                        marker = self.target_marker(key)
+                        if marker.exists():
+                            os.replace(str(marker), str(marker.with_name("%s-%s%s" % (
+                                marker.stem, datetime.now().strftime("%Y%m%d-%H%M%S"), marker.suffix))))
+                    self.done.clear()
+                    LOG.info("resumed after a purchase; old markers archived")
                 for trigger in take_triggers(self.trigger_dir):
+                    source = str(trigger.get("source"))
+                    if source.startswith("tg-"):
+                        self.learn_codes(promo_codes(str(trigger.get("text") or "")), source)
                     targets = trigger_targets(trigger, self.cfg)
                     if targets:
-                        self.arm(targets, str(trigger.get("source")), trigger_is_public(trigger))
+                        self.arm(targets, source, trigger_is_public(trigger),
+                                 [url for url in targets if quiet_target(url, trigger, self.cfg)])
                     else:
                         LOG.info("trigger from %s arms nothing: %s", trigger.get("source"), trigger.get("urls"))
                 if self.armed:
@@ -903,11 +1154,7 @@ class BoilAutoBuyer:
         return 0
 
     def marker_result(self) -> str:
-        try:
-            data = json.loads(self.marker_path.read_text("utf-8"))
-        except (OSError, ValueError):
-            return ""
-        return "%s %s 账单 #%s %s" % (data.get("product"), data.get("plan"), data.get("invoice"), data.get("invoice_status"))
+        return self.done_summary()
 
     def _on_signal(self, signum, frame) -> None:  # noqa: ANN001
         self.stopping = True
@@ -922,10 +1169,13 @@ class BoilAutoBuyer:
         if kind not in ("pid", "product") or not value:
             raise SystemExit("need a product link or cart.php?a=add&pid=N")
         pid = value
-        # Tests use a broad include so a public regular product can stand in.
-        self.include = [""]
+        # Tests use a broad target so a public regular product can stand in.
+        self.cfg = dict(self.cfg, require_words=[""], name_exclude=[], targets=[{
+            "key": "test", "label": "测试", "include": [""], "annual_only_month": 1e9, "any_cycle_month": 1e9}])
+        self.targets = self.cfg["targets"]
+        self.done = {}
         if getattr(self.args, "cycle", None):
-            self.cycle = str(self.args.cycle)
+            self.force_cycle = str(self.args.cycle)
         print("result:", self.order(pid, mode=mode))
         return 0
 
