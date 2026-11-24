@@ -1,9 +1,12 @@
 """BOILCLOUD (cloud.boil.network) auto-buyer, driven by the BOIL monitors.
 
-Target (user, 2026-11-11): one SeedNet (遠傳) annual plan, an independent
-dynamic IP VPS (not NAT, not static, not a blind box), at most $300 due
-today. BOIL sells such holiday plans around Christmas, named after the
-zodiac year (2026 马年 HiNet; next one probably 羊年 SeedNet).
+Target (user, 2026-11-11, price rule 2026-11-24): one SeedNet (遠傳)
+annual-only plan, an independent dynamic IP VPS (not NAT, not static, not a
+blind box), at most $28.5 a month over the year ($342 for the year and due
+today). A plan that also sells monthly / quarterly / half-yearly is a
+regular plan, not the sale one, and is skipped. BOIL sells such holiday
+plans around Christmas, named after the zodiac year (2026 马年 HiNet; next
+one probably 羊年 SeedNet), or as Black Friday / other holiday items.
 
 Like the FAC buyer it does not watch the site by itself. The Telegram relay
 (a cloud.boil.network link posted on BOIL's channel or by BOIL's own
@@ -17,7 +20,8 @@ shop's category menu. Until then the buyer only re-checks that menu on a
 public page, logged out; it never opens the hidden page while logged in.
 
 The shop is plain WHMCS with no captcha, so this is plain HTTP (requests),
-no browser. Order: cart.php?a=add&pid=N -> confproduct (billingcycle =
+no browser. Order: cart.php?a=add&pid=N (a store product link redirects
+straight to the configure page, with no pid in it) -> confproduct (billingcycle =
 annually, default options, no paid upgrades) -> checkout page (today's total
 and balance) -> submit with "apply credit" (the default). A short balance
 leaves an unpaid invoice: Telegram sends the pay link at once, the buyer
@@ -68,7 +72,10 @@ DEFAULTS: Dict[str, Any] = {
     # Whole words: NAT, static IP, random blind boxes.
     "name_exclude": ["nat", "靜態", "静态", "static", "盲盒", "lucky box", "福袋"],
     "billing_cycle": "annually",
-    "max_total": 300.0,
+    # A plan offering any of these is not an annual-only sale plan.
+    "reject_cycles": ["monthly", "quarterly", "semiannually"],
+    # Both the annual price and today's total (with any setup fee).
+    "max_total": 342.0,
     "hostname": "seednet",
     # Sale groups worth watching without a SeedNet word in the post.
     "sale_groups": ["festive-offer"],
@@ -129,6 +136,11 @@ def parse_usd(text: Any) -> Optional[float]:
         return float(match.group(1).replace(",", ""))
     except ValueError:
         return None
+
+
+def cart_link(base_url: str, item: str) -> str:
+    """What to open to put ``item`` (a PID or a store product link) in the cart."""
+    return urljoin(base_url, "cart.php?a=add&pid=%s" % item if item.isdigit() else item)
 
 
 def text_matches(text: str, include: Iterable[str], exclude: Iterable[str]) -> bool:
@@ -378,6 +390,7 @@ class BoilAutoBuyer:
         self.include = [str(v) for v in cfg["name_include"]]
         self.exclude = [str(v) for v in cfg["name_exclude"]]
         self.cycle = str(cfg["billing_cycle"])
+        self.reject_cycles = [str(v) for v in cfg["reject_cycles"]]
         self.max_total = float(cfg["max_total"])
         self.marker_path = Path(str(cfg["marker_file"]))
         self.trigger_dir = str(cfg["trigger_dir"])
@@ -399,7 +412,7 @@ class BoilAutoBuyer:
         self.armed: Dict[str, Dict[str, Any]] = {}
         self.failures: Dict[str, int] = {}
         self.notified: set = set()
-        # PIDs that will never match (name, no annual cycle, over budget).
+        # PIDs / product links that will never match (name, cycles, over budget).
         self.dropped: set = set()
         self.cart_dirty = True
         self.last_page_at = float("-inf")
@@ -409,7 +422,8 @@ class BoilAutoBuyer:
             STATUS_DIR,
             NAME,
             "BOIL SeedNet 年付",
-            "名称/说明含 SeedNet/遠傳，非 NAT/静态/盲盒，年付，今日总价 ≤ $%g，余额付款" % self.max_total,
+            "名称/说明含 SeedNet/遠傳，非 NAT/静态/盲盒，只有年付（没有月/季/半年付），"
+            "年付价和今日总价 ≤ $%g（每月 $%.2f），余额付款" % (self.max_total, self.max_total / 12),
             float(cfg["fast_poll_seconds"]),
         )
         self.switch = Switch(Control(STATUS_DIR, NAME), self.marker_path, self.beat)
@@ -519,26 +533,28 @@ class BoilAutoBuyer:
         return parse_usd(match.group(1)) if match else None
 
     # -- one product ---------------------------------------------------------
-    def resolve_pid(self, url: str) -> Optional[str]:
-        """The PID a store product link redirects to, without adding it to the cart."""
-        kind, value = classify_url(url, self.base_url)
-        if kind == "pid":
-            return value
-        if kind != "product":
-            return None
-        response = self.request("GET", url, allow_redirects=False)
-        location = response.headers.get("Location", "")
-        match = re.search(r"pid=(\d+)", location)
-        return match.group(1) if match else None
+    def over_budget(self, pid: str, name: str, what: str, amount: float) -> str:
+        key = "price:%s" % pid
+        if key not in self.notified:
+            self.notified.add(key)
+            self.notify(
+                "💸 <b>BOIL 抢购：%s 超出预算，没有下单</b>\n%s $%.2f &gt; 上限 $%g（每月 $%.2f）\n%s"
+                % (html.escape(name), what, amount, self.max_total, self.max_total / 12,
+                   html.escape(cart_link(self.base_url, pid)))
+            )
+        self.dropped.add(pid)
+        self.empty_cart()
+        return OrderResult.DROP
 
     def order(self, pid: str, mode: str = "live") -> str:
-        """Order PID ``pid``. ``mode``: live, dry (stop before checkout) or
-        tos (submit checkout without the TOS box: WHMCS refuses, no order)."""
+        """Order ``pid``: a PID or a store product link. ``mode``: live, dry
+        (stop before checkout) or tos (submit checkout without the TOS box:
+        WHMCS refuses, no order)."""
         fast = float(self.cfg["order_spacing_seconds"])
         if self.cart_dirty:
             self.empty_cart()
         self.cart_dirty = True
-        response = self.request("GET", "cart.php?a=add&pid=%s" % pid, spacing=fast)
+        response = self.request("GET", cart_link(self.base_url, pid), spacing=fast)
         if "a=confproduct" not in response.url:
             if OUT_OF_STOCK.search(BeautifulSoup(response.text, "lxml").get_text(" ", strip=True)):
                 LOG.info("pid %s out of stock", pid)
@@ -556,6 +572,22 @@ class BoilAutoBuyer:
             self.dropped.add(pid)
             self.empty_cart()
             return self.order_failed(pid, name, info["why"], final=True)
+        short = [label for value, label in info["cycles"].items() if value in self.reject_cycles]
+        if short:
+            key = "cycles:%s" % pid
+            if key not in self.notified:
+                self.notified.add(key)
+                self.notify(
+                    "ℹ️ <b>BOIL 抢购：%s 不是只有年付，没有下单</b>\n还有：%s\n%s"
+                    % (html.escape(name), html.escape("、".join(short)),
+                       html.escape(cart_link(self.base_url, pid)))
+                )
+            self.dropped.add(pid)
+            self.empty_cart()
+            return OrderResult.DROP
+        annual = parse_usd(info["cycles"].get(self.cycle))
+        if annual is not None and annual > self.max_total + 0.005:
+            return self.over_budget(pid, name, "年付价", annual)
         index = parse_qs(urlparse(response.url).query).get("i", [data.get("i", "0")])[0]
         data["i"] = data.get("i") or index
         reply = self.request("POST", "cart.php?a=confproduct", spacing=fast, data=dict(data, ajax="1"))
@@ -578,17 +610,7 @@ class BoilAutoBuyer:
             self.ensure_login()
             return OrderResult.WAIT
         if total > self.max_total + 0.005:
-            key = "price:%s" % pid
-            if key not in self.notified:
-                self.notified.add(key)
-                self.notify(
-                    "💸 <b>BOIL 抢购：%s 超出预算，没有下单</b>\n今日总价 $%.2f &gt; 上限 $%g\n%s"
-                    % (html.escape(name), total, self.max_total,
-                       html.escape(urljoin(self.base_url, "cart.php?a=add&pid=%s" % pid)))
-                )
-            self.dropped.add(pid)
-            self.empty_cart()
-            return OrderResult.DROP
+            return self.over_budget(pid, name, "今日总价", total)
         if mode == "dry":
             print("DRY RUN ok: %s, %s, total $%.2f, balance %s, checkout fields %s"
                   % (name, info["cycles"].get(self.cycle), total, balance, sorted(form)))
@@ -711,7 +733,7 @@ class BoilAutoBuyer:
         self.notify(
             "❌ <b>BOIL 下单失败</b>：%s\n%s\n%s\n%s"
             % (html.escape(name), html.escape(why),
-               html.escape(urljoin(self.base_url, "cart.php?a=add&pid=%s" % key)),
+               html.escape(cart_link(self.base_url, key)),
                "已放弃这个商品。" if give_up else "下一轮重试（第 %d 次）。" % count)
         )
         return OrderResult.DROP if give_up else OrderResult.WAIT
@@ -740,10 +762,11 @@ class BoilAutoBuyer:
                 if self.order(card.product_id) == OrderResult.BOUGHT:
                     return OrderResult.BOUGHT
             return OrderResult.WAIT
-        pid = self.resolve_pid(url)
-        if pid is None or pid in self.dropped:
+        if kind == "pid" and value:
+            url = value
+        if kind not in ("pid", "product") or url in self.dropped:
             return OrderResult.DROP
-        return self.order(pid)
+        return self.order(url)
 
     def arm(self, urls: Iterable[str], source: str, public: bool) -> None:
         now = time.monotonic()
@@ -896,9 +919,9 @@ class BoilAutoBuyer:
             return 1
         print("logged in; balance:", self.balance())
         kind, value = classify_url(url, self.base_url)
-        pid = value if kind == "pid" else self.resolve_pid(url)
-        if pid is None:
+        if kind not in ("pid", "product") or not value:
             raise SystemExit("need a product link or cart.php?a=add&pid=N")
+        pid = value
         # Tests use a broad include so a public regular product can stand in.
         self.include = [""]
         if getattr(self.args, "cycle", None):

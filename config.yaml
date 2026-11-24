@@ -125,15 +125,20 @@ fac_autobuy:
 # BOILCLOUD auto-buyer (watcher.boil_autobuy, deploy/boil-autobuy.service;
 # user, 2026-11-11). Plain HTTP (WHMCS, no captcha), no browser. Woken by the
 # BOIL TG relay and boilcloud_sale like the FAC buyer; never polls on its own.
-# Buys ONE SeedNet (遠傳) annual plan: independent dynamic IP, not NAT /
-# static / blind box, today's total <= max_total, paid from the balance
-# (user tops up before the sale), then pauses itself. Expected around
-# Christmas (2027 = 羊年 plan). Hidden links: notify only, ordered once
+# Buys ONE SeedNet (遠傳) annual-only plan: independent dynamic IP, not NAT /
+# static / blind box, paid from the balance (user tops up before the sale),
+# then pauses itself. Expected around Christmas (2027 = 羊年 plan) or as a
+# Black Friday / holiday item. Hidden links: notify only, ordered once
 # public (TG post, or festive-offer listed in the shop menu).
+# 2026-11-24 (user): at most $28.5 a month over the year, so the annual price
+# and today's total must both be <= max_total = 28.5 x 12; a plan that also
+# sells monthly / quarterly / half-yearly (reject_cycles) is not the sale
+# plan and is skipped with a TG note. Balance $600 topped up 11-24.
 boil_autobuy:
   enabled: true
-  max_total: 300
+  max_total: 342
   billing_cycle: annually
+  reject_cycles: [monthly, quarterly, semiannually]
   name_include: [seednet, seed net, 遠傳, 远传]
   name_exclude: [nat, 靜態, 静态, static, 盲盒, lucky box, 福袋]
   sale_groups: [festive-offer]

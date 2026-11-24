@@ -21,7 +21,7 @@ CFG = dict(ba.DEFAULTS)
 
 
 def conf_page(name="2027 羊年 SeedNet 300Mbps VPS", cycles=None, desc="遠傳 SeedNet 寬頻 動態 IP"):
-    cycles = cycles or [("monthly", "$38.00 USD 月繳"), ("annually", "$288.00 USD 年繳 + $3.00 USD 設定費")]
+    cycles = cycles or [("annually", "$288.00 USD 年繳 + $3.00 USD 設定費")]
     options = "".join('<option value="%s">%s</option>' % item for item in cycles)
     return """
     <html><body><div class="product-info"><p class="product-title">%s</p><p>%s</p></div>
@@ -166,8 +166,9 @@ class HelperTest(unittest.TestCase):
 class FakeSite:
     """Answers the buyer's requests by URL; records every call."""
 
-    def __init__(self, checkout=None, invoice_status="Paid", add_url=None):
+    def __init__(self, checkout=None, invoice_status="Paid", add_url=None, cycles=None):
         self.calls = []
+        self.cycles = cycles
         self.checkout = checkout or checkout_page()
         self.invoice_status = invoice_status
         self.add_url = add_url or BASE + "cart.php?a=confproduct&i=0"
@@ -178,8 +179,8 @@ class FakeSite:
         self.calls.append((method, url))
         if "a=empty" in url:
             return resp(url=BASE + "cart.php?a=view")
-        if "a=add&pid=" in url:
-            return resp(conf_page(), self.add_url)
+        if "a=add&pid=" in url or "store/taiwan-home-broadband/" in url:
+            return resp(conf_page(cycles=self.cycles), self.add_url)
         if "a=confproduct" in url:
             return resp("")
         if "a=checkout" in url and method == "GET":
@@ -271,6 +272,42 @@ class BuyerTest(unittest.TestCase):
             self.assertIn("超出预算", buyer.sent[0])
             self.assertIn("540", buyer.dropped)
             self.assertEqual(site.calls[-1][1], BASE + "cart.php?a=empty")
+
+    def test_plan_that_also_sells_monthly_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(cycles=[("monthly", "$38.00 USD 月繳"), ("annually", "$288.00 USD 年繳")])
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("540"), ba.OrderResult.DROP)
+            self.assertIsNone(site.posted_checkout)
+            self.assertIn("不是只有年付", buyer.sent[0])
+            self.assertIn("月繳", buyer.sent[0])
+            self.assertNotIn(("GET", BASE + "cart.php?a=checkout"), site.calls)
+
+    def test_annual_price_over_28_5_a_month_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(cycles=[("annually", "$348.00 USD 年繳")])
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.max_total, 342)
+            self.assertEqual(buyer.order("540"), ba.OrderResult.DROP)
+            self.assertIn("年付价 $348.00", buyer.sent[0])
+            self.assertIsNone(site.posted_checkout)
+
+    def test_annual_only_at_the_cap_is_bought(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(cycles=[("annually", "$342.00 USD 年繳")], checkout=checkout_page(total="$342.00 USD", balance="$600.00 USD"))
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("540"), ba.OrderResult.BOUGHT)
+
+    def test_tg_product_link_without_pid_is_ordered(self):
+        # BOIL's store product links redirect straight to confproduct&i=0.
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            buyer = self.buyer(tmp, site)
+            link = BASE + "store/taiwan-home-broadband/2027-seednet"
+            buyer.arm([link], "tg-channel", True)
+            self.assertTrue(buyer.poll_armed())
+            self.assertIn(("GET", link), site.calls)
+            self.assertIsNotNone(site.posted_checkout)
 
     def test_logged_out_checkout_is_never_submitted(self):
         with tempfile.TemporaryDirectory() as tmp:
