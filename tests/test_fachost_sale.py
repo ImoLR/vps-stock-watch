@@ -9,8 +9,11 @@ from watcher.diff import compare_products
 from watcher.fac_tg_watch import (
     fac_links,
     format_relay,
+    format_topic_digest,
+    format_topic_hit,
     group_relay_reason,
     message_urls,
+    topic_reason,
 )
 from watcher.models import ChangeType
 from watcher.providers import build_provider
@@ -181,6 +184,38 @@ class FacTelegramRelayTest(unittest.TestCase):
         self.assertIn("&lt;b&gt;黑五&lt;/b&gt;", text)
         self.assertIn('href="https://fachost.cloud/products/special-regulations"', text)
         self.assertIn("打开原消息", text)
+
+
+class TopicGroupTest(unittest.TestCase):
+    TOPIC = ["會聚", "会聚", "荟聚", "leikwan bridge"]
+    SALE = ["优惠", "活動"]
+
+    def test_topic_rules(self):
+        self.assertEqual(topic_reason("会聚下周有优惠", True, self.TOPIC, self.SALE), "staff")
+        self.assertEqual(topic_reason("活動開始", True, self.TOPIC, self.SALE), "staff")
+        self.assertEqual(topic_reason("荟聚要有啥变化", False, self.TOPIC, self.SALE), "topic")
+        self.assertEqual(topic_reason("LeiKwan Bridge 掉线", False, self.TOPIC, self.SALE), "topic")
+        # Members' sale talk and the owner's small talk are not relayed.
+        self.assertIsNone(topic_reason("有优惠吗", False, self.TOPIC, self.SALE))
+        self.assertIsNone(topic_reason("新东西", True, self.TOPIC, self.SALE))
+
+    def item(self, n, text="会聚 <b>", reply=None):
+        return {"id": n, "when": "11-26 16:17", "sender": "Iver", "reason": "topic",
+                "text": text, "reply": reply, "link": "https://t.me/c/2660768703/%d" % n}
+
+    def test_hit_escapes_and_shows_reply(self):
+        text = format_topic_hit("利群", self.item(1, reply="Amazing Not：组网+融合"))
+        self.assertIn("会聚 &lt;b&gt;", text)
+        self.assertIn("↪ 回复：Amazing Not：组网+融合", text)
+        self.assertIn('href="https://t.me/c/2660768703/1"', text)
+
+    def test_digest_splits_long_batches(self):
+        items = [self.item(n, text="会聚" * 200) for n in range(30)]
+        messages = format_topic_digest("利群", "利群會聚", items)
+        self.assertGreater(len(messages), 1)
+        self.assertTrue(all(len(message) <= 3500 for message in messages))
+        self.assertIn("（30 条）", messages[0])
+        self.assertEqual(sum(message.count("原消息") for message in messages), 30)
 
 
 if __name__ == "__main__":

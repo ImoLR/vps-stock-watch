@@ -27,6 +27,12 @@ accounts when the group has many community admins.
 ``watch_channels`` (2026-11-10, user): other vendors' channels the account
 follows (DMIT). Only posts naming a watched plan are relayed, with their
 short links resolved to PIDs; pushed like the FAC channel, never polled.
+
+``topic_groups`` (2026-11-26, user): chat groups read for a topic (LeiKwan
+「利群會聚」). A staff member's message (or a channel post forwarded into the
+group) with a sale or topic word is relayed at once; anyone else's message
+naming the topic is collected and sent as a digest every few hours. Every
+hit is also appended to a JSONL log. Never wakes an auto-buyer.
 """
 from __future__ import annotations
 
@@ -245,6 +251,74 @@ def vendor_channel(item: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, An
     }
 
 
+def topic_reason(
+    text: str,
+    trusted: bool,
+    topic_words: Iterable[str],
+    sale_words: Iterable[str],
+) -> Optional[str]:
+    """``"staff"`` (send now), ``"topic"`` (digest) or None for a group message."""
+    on_topic = matches_keyword(text, topic_words)
+    if trusted and (on_topic or matches_keyword(text, sale_words)):
+        return "staff"
+    if on_topic:
+        return "topic"
+    return None
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def format_topic_hit(name: str, item: Dict[str, Any]) -> str:
+    lines = ["<b>📣 %s 群：老板/销售发言</b>" % html.escape(name)]
+    lines.append(" · ".join(html.escape(part) for part in (item["when"], item["sender"]) if part))
+    if item.get("reply"):
+        lines.extend(["", "<i>↪ 回复：%s</i>" % html.escape(item["reply"])])
+    lines.extend(["", html.escape(item["text"] or "（无文字）")])
+    lines.extend(["", '<a href="%s">打开原消息</a>' % html.escape(item["link"], quote=True)])
+    return "\n".join(lines)
+
+
+def format_topic_digest(name: str, topic: str, items: List[Dict[str, Any]], limit: int = 3500) -> List[str]:
+    """One or more messages (Telegram caps a message at 4096 characters)."""
+    header = "<b>🗂 %s 群「%s」讨论摘要（%d 条）</b>" % (html.escape(name), html.escape(topic), len(items))
+    blocks = []
+    for item in items:
+        block = ["• %s %s" % (html.escape(item["when"]), html.escape(item["sender"]))]
+        if item.get("reply"):
+            block.append("  <i>↪ %s</i>" % html.escape(item["reply"]))
+        block.append("  %s  <a href=\"%s\">原消息</a>" % (
+            html.escape(item["text"] or "（无文字）"), html.escape(item["link"], quote=True)))
+        blocks.append("\n".join(block))
+    messages: List[str] = []
+    current = header
+    for block in blocks:
+        if len(current) + len(block) + 2 > limit and current != header:
+            messages.append(current)
+            current = header + "（续）"
+        current += "\n\n" + block
+    messages.append(current)
+    return messages
+
+
+class TopicGroup:
+    """A chat group read for one topic (``topic_groups`` entry)."""
+
+    def __init__(self, item: Dict[str, Any], base: Path):
+        self.name = str(item.get("name") or "群")
+        self.group_id = int(item["group_id"])
+        self.topic = str(item.get("topic") or self.name)
+        # User IDs (usernames change); a linked channel's ID counts as staff too.
+        self.staff_ids = {int(value) for value in item.get("staff_ids") or []}
+        self.topic_words = [str(word) for word in item.get("topic_words") or []]
+        self.sale_words = [str(word) for word in item.get("sale_words") or DEFAULT_KEYWORDS]
+        self.digest_seconds = max(600, int(item.get("digest_seconds", 7200)))
+        self.digest_max_items = max(5, int(item.get("digest_max_items", 30)))
+        self.log_path = base / str(item.get("log_file") or "data/tg/topic_%s.jsonl" % self.group_id)
+
+
 class Relay:
     """One vendor's announcement channel and chat group."""
 
@@ -311,6 +385,11 @@ class FacTelegramWatch:
             chat_id: vendor for vendor in self.vendor_channels for chat_id in vendor["ids"]
         }
         self.state.data.setdefault("vendor_last_ids", {})
+        self.topic_groups = {
+            group.group_id: group
+            for group in (TopicGroup(item, base) for item in self.cfg.get("topic_groups") or [])
+        }
+        self.state.data.setdefault("topic_groups", {})
         self._empty_logged: Set[int] = set()
         self.http = requests.Session()
 
@@ -473,6 +552,86 @@ class FacTelegramWatch:
             )
         )
 
+    def _topic_state(self, group: TopicGroup) -> Dict[str, Any]:
+        entry = self.state.data["topic_groups"].setdefault(str(group.group_id), {})
+        entry.setdefault("pending", [])
+        entry.setdefault("last_digest", 0)
+        return entry
+
+    async def handle_topic(self, message: Any) -> None:
+        group = self.topic_groups.get(int(getattr(message, "chat_id", 0) or 0))
+        if group is None:
+            return
+        text = message.raw_text or ""
+        sender_id = int(message.sender_id or 0)
+        fwd = getattr(message, "fwd_from", None)
+        fwd_channel = getattr(getattr(fwd, "from_id", None), "channel_id", None) if fwd else None
+        trusted = sender_id in group.staff_ids or (
+            fwd_channel is not None and int("-100%s" % fwd_channel) in group.staff_ids
+        )
+        reason = topic_reason(text, trusted, group.topic_words, group.sale_words)
+        if not reason:
+            return
+        reply = None
+        if getattr(message, "reply_to_msg_id", None):
+            try:
+                original = await message.get_reply_message()
+                if original is not None:
+                    reply = "%s：%s" % (
+                        _display(await original.get_sender()), _clip(original.raw_text or "（图片/文件）", 150)
+                    )
+            except Exception:
+                LOG.exception("%s reply lookup failed", group.name)
+        item = {
+            "id": message.id,
+            "when": message.date.astimezone(CST).strftime("%m-%d %H:%M") if message.date else "",
+            "sender": _display(await message.get_sender()),
+            "reason": reason,
+            "text": _clip(text, 3000 if reason == "staff" else 500),
+            "reply": reply,
+            "link": "https://t.me/c/%s/%s" % (str(group.group_id)[4:], message.id),
+        }
+        LOG.info("%s topic hit %s/%s: %s", group.name, reason, message.id, item["text"][:80])
+        try:
+            group.log_path.parent.mkdir(parents=True, exist_ok=True)
+            with group.log_path.open("a", encoding="utf-8") as log:
+                log.write(json.dumps(item, ensure_ascii=False) + "\n")
+            os.chmod(group.log_path, 0o600)
+        except OSError:
+            LOG.exception("%s topic log write failed", group.name)
+        if reason == "staff":
+            await self.notify(format_topic_hit(group.name, item))
+            return
+        async with self._lock:
+            state = self._topic_state(group)
+            state["pending"].append(item)
+            full = len(state["pending"]) >= group.digest_max_items
+            self.state.save()
+        if full:
+            await self.send_topic_digest(group)
+
+    async def send_topic_digest(self, group: TopicGroup) -> None:
+        async with self._lock:
+            state = self._topic_state(group)
+            items = list(state["pending"])
+            state["pending"] = []
+            state["last_digest"] = time.time()
+            self.state.save()
+        if not items:
+            return
+        for message in format_topic_digest(group.name, group.topic, items):
+            await self.notify(message)
+
+    async def _topic_digest_loop(self) -> None:
+        while True:
+            await asyncio.sleep(60)
+            for group in list(self.topic_groups.values()):
+                try:
+                    if time.time() - self._topic_state(group)["last_digest"] >= group.digest_seconds:
+                        await self.send_topic_digest(group)
+                except Exception:
+                    LOG.exception("%s topic digest failed", group.name)
+
     async def catch_up_vendors(self) -> None:
         for chat_id in self.vendor_by_id:
             last = self.state.data["vendor_last_ids"].get(str(chat_id))
@@ -584,17 +743,51 @@ class FacTelegramWatch:
                     except Exception:
                         LOG.exception("group message handling failed")
 
+            # Topic groups are extras: a group that cannot be opened is dropped
+            # with a log line and never holds up the FAC relay.
+            for group_id in list(self.topic_groups):
+                try:
+                    await self.client.get_entity(group_id)
+                except Exception:
+                    LOG.exception("cannot open topic group %s; skipping it", group_id)
+                    self.topic_groups.pop(group_id)
+            if self.topic_groups:
+                LOG.info("watching topic groups: %s", sorted(self.topic_groups))
+
+                @self.client.on(events.NewMessage(chats=list(self.topic_groups)))
+                async def on_topic(event):  # noqa: ANN001
+                    try:
+                        await self.handle_topic(event.message)
+                    except Exception:
+                        LOG.exception("topic group message handling failed")
+
+                for group in self.topic_groups.values():
+                    state = self._topic_state(group)
+                    if not state.get("announced"):
+                        state["announced"] = True
+                        state["last_digest"] = time.time()
+                        self.state.save()
+                        await self.notify(
+                            "<b>✅ %s 群监听已启动</b>\n\n老板/销售发的活动或「%s」消息马上转发；"
+                            "群友讨论「%s」每 %d 小时汇总一次。"
+                            % (html.escape(group.name), html.escape(group.topic),
+                               html.escape(group.topic), group.digest_seconds // 3600)
+                        )
+
             for relay in first_starts:
                 await self.notify(
                     "<b>✅ %s TG 监听已启动</b>\n\n公告频道每条都会转发；群里只转发含 %s 链接、"
                     "或%s发的活动消息。"
                     % (relay.name, relay.name, "官方账号" if relay.staff else "管理员")
                 )
-            task = asyncio.ensure_future(self._catch_up_loop())
+            tasks = [asyncio.ensure_future(self._catch_up_loop())]
+            if self.topic_groups:
+                tasks.append(asyncio.ensure_future(self._topic_digest_loop()))
             try:
                 await self.client.run_until_disconnected()
             finally:
-                task.cancel()
+                for task in tasks:
+                    task.cancel()
             return 1
         except UnauthorizedError:
             LOG.exception("Telegram session rejected")

@@ -79,6 +79,28 @@ fac_tg_watch:
         優惠碼, 优惠码, 折扣碼, 折扣码, 上架, 上新, 補貨, 补货, 限時, 限时, 限量,
         活動, 活动, 開賣, 开卖, 下單鏈接, 下单链接,
       ]
+  # 2026-11-26 (user): LeiKwan chat group, read for 利群會聚 and sales. The
+  # owner's or the sales lead's message with a sale/topic word (and channel
+  # posts forwarded into the group) is sent at once; members' 會聚 talk is
+  # sent as a digest every 2 h. Notify-only, never wakes a buyer.
+  topic_groups:
+    - name: 利群
+      group_id: -1002660768703  # LeiKwan Online Academy|利群綫上職業技術學院 @leikwanhostchat
+      topic: 利群會聚
+      staff_ids:
+        - 517101504     # Amazing Not, group owner (the boss)
+        - 7195429958    # 霖磐chin @aislen_x, title 「销售鬃奸」 (sales lead)
+        - -1002597761420  # LeiKwan Host What's New @leikwanhost (linked channel)
+      topic_words: [會聚, 会聚, 匯聚, 汇聚, 荟聚, 薈聚, leikwan bridge]
+      sale_words: [
+        黑五, black friday, 雙11, 双11, 雙十一, 双十一, 雙12, 双12, 雙十二, 双十二,
+        年付, 年繳, 年缴, 聖誕, 圣诞, 週年, 周年, 優惠, 优惠, 折扣, 打折, 九折, 八折,
+        七折, 六折, 五折, 半價, 半价, 促銷, 促销, 特價, 特价, 降價, 降价, 補償, 补偿,
+        抽獎, 抽奖, 秒殺, 秒杀, 免費, 免费, 上架, 上新, 補貨, 补货, 限時, 限时, 限量,
+        活動, 活动, 開賣, 开卖, 預售, 预售,
+      ]
+      digest_seconds: 7200
+      log_file: data/tg/leikwan_topic.jsonl
   # 2026-11-10 (user): DMIT channels in the account's VPS公告群 folder, pushed
   # like the FAC channel. Only posts naming a watched special plan are sent;
   # act.dmithost.net short links are resolved to PIDs (one request each).
