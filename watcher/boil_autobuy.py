@@ -27,6 +27,12 @@ public once it was posted on Telegram, or once its group shows up in the
 shop's category menu. Until then the buyer only re-checks that menu on a
 public page, logged out; it never opens the hidden page while logged in.
 
+BOIL puts sale stock out on the hour (2026 Black Friday: a 0-stock card in
+the public festive-offer, stock at 0:00 JST, sold out within a minute). So
+while a public sale group shows a target card that has no stock yet, the
+buyer reads that group every few seconds around each full hour (see
+``burst_*``), logged in and with the newest invoice id already read.
+
 The shop is plain WHMCS with no captcha, so this is plain HTTP (requests),
 no browser. Order: cart.php?a=add&pid=N (a store product link redirects
 straight to the configure page, with no pid in it) -> confproduct (the
@@ -51,7 +57,7 @@ import secrets
 import signal
 import string
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
@@ -127,7 +133,24 @@ DEFAULTS: Dict[str, Any] = {
     # order (add, configure, checkout page, submit) run closer together: the
     # agreed snipe target only.
     "page_spacing_seconds": 4,
-    "order_spacing_seconds": 1.5,
+    "order_spacing_seconds": 1.0,
+    # Hourly bursts (user, 2026-11-26). BOIL puts sale stock out on the hour:
+    # the 2026 Black Friday box sat in the public festive-offer with 0 stock
+    # from ~22:55, got its stock at 0:00 JST (23:00 TW) and was gone in a
+    # minute. While a public sale group shows a target card with no stock
+    # yet, the group is read every burst_seconds from burst_lead s before to
+    # burst_tail s after each of burst_minutes past the hours in burst_hours
+    # (local time = TW), for at most burst_max_hours after the card first
+    # showed up. A card that isn't a target never starts this.
+    "burst_minutes": [0],
+    "burst_hours": list(range(8, 24)),
+    "burst_lead_seconds": 30,
+    "burst_tail_seconds": 60,
+    "burst_seconds": 3,
+    "burst_max_hours": 36,
+    # The newest invoice id read while warming up for a burst stays good
+    # this long (saves one page right before checkout).
+    "invoice_cache_seconds": 600,
     "login_check_hours": 12,
     "max_order_failures": 3,
     "public_delay_seconds": 4,
@@ -392,6 +415,29 @@ def public_wait(min_age: float, last_hidden_at: Optional[float], now: float) -> 
     return max(0.0, min_age - (now - last_hidden_at))
 
 
+def burst_window(now: datetime, minutes: Iterable[int], hours: Iterable[int],
+                 lead: float, tail: float) -> Tuple[bool, float]:
+    """(inside a burst window at ``now``, seconds until the next one opens).
+
+    A window runs from ``lead`` s before to ``tail`` s after HH:MM for every
+    MM in ``minutes`` and HH in ``hours`` (``now``'s own clock)."""
+    hours, minutes = {int(h) for h in hours}, sorted({int(m) for m in minutes})
+    base = now.replace(minute=0, second=0, microsecond=0)
+    wait = float("inf")
+    for step in range(-1, 49):
+        mark_hour = base + timedelta(hours=step)
+        if mark_hour.hour not in hours:
+            continue
+        for minute in minutes:
+            mark = mark_hour.replace(minute=minute)
+            start, end = mark - timedelta(seconds=lead), mark + timedelta(seconds=tail)
+            if start <= now <= end:
+                return True, 0.0
+            if start > now:
+                wait = min(wait, (start - now).total_seconds())
+    return False, wait
+
+
 def random_password() -> str:
     alphabet = string.ascii_letters + string.digits
     core = "".join(secrets.choice(alphabet) for _ in range(14))
@@ -583,6 +629,12 @@ class BoilAutoBuyer:
         # ... or not at this price (tried again with a new promo code).
         self.price_dropped: set = set()
         self.spacing = float(cfg["order_spacing_seconds"])
+        # Target cards waiting for stock in a public sale group: when each
+        # was first seen (time.time()), and which ones each group shows now.
+        self.presale_seen: Dict[str, float] = {}
+        self.presale: Dict[str, List[str]] = {}
+        # (newest invoice id, when read) from a burst warm-up.
+        self.known_invoice: Optional[Tuple[Optional[int], float]] = None
         self.cart_dirty = True
         self.last_page_at = float("-inf")
         self.last_login_check = float("-inf")
@@ -886,7 +938,12 @@ class BoilAutoBuyer:
 
     def checkout(self, pid: str, name: str, cycle_label: str, form: Dict[str, str],
                  total: float, balance: Optional[float], target: Dict[str, Any]) -> str:
-        known = self.newest_invoice()
+        cached = self.known_invoice
+        if cached is not None and time.monotonic() - cached[1] <= float(self.cfg["invoice_cache_seconds"]):
+            known = cached[0]  # read while warming up for this burst
+        else:
+            known = self.newest_invoice()
+        self.known_invoice = None
         self.beat(state="ordering", detail="正在下单 %s" % name)
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = pool.submit(
@@ -1006,11 +1063,12 @@ class BoilAutoBuyer:
         return OrderResult.DROP if give_up else OrderResult.WAIT
 
     # -- armed links -----------------------------------------------------------
-    def attempt(self, url: str, quiet: bool = False) -> str:
+    def attempt(self, url: str, quiet: bool = False, spacing: Optional[float] = None) -> str:
         kind, value = classify_url(url, self.base_url)
         if kind == "group" and value:
-            page = self.request("GET", url)
+            page = self.request("GET", url, spacing=spacing)
             if "/store/%s" % value not in unquote(page.url):
+                self.presale.pop(url, None)
                 return OrderResult.WAIT
             cards = self.parser.parse_category(page.text, page.url, value)
             order = {target["key"]: index for index, target in enumerate(self.targets)}
@@ -1024,6 +1082,7 @@ class BoilAutoBuyer:
             LOG.info("group %s: %d cards, %d matching", value, len(cards), len(matching))
             bought = False
             pending = False
+            waiting: List[str] = []
             for card in matching:
                 if card.product_id in self.dropped or card.product_id in self.price_dropped:
                     continue
@@ -1032,6 +1091,9 @@ class BoilAutoBuyer:
                 if card.available is False:
                     # Sold out: wait for it, unless only a monitor or code armed this.
                     pending = pending or not quiet
+                    if value in self.cfg["sale_groups"]:
+                        waiting.append(card.product_id)
+                        self.presale_started(card.product_id, card.name, url)
                     continue
                 result = self.order(card.product_id, quiet=quiet)
                 if result == OrderResult.BOUGHT:
@@ -1040,6 +1102,10 @@ class BoilAutoBuyer:
                         break
                 elif result == OrderResult.WAIT:
                     pending = True
+            if waiting and not self.all_done():
+                self.presale[url] = waiting
+            else:
+                self.presale.pop(url, None)
             if bought:
                 return OrderResult.BOUGHT
             if value in self.cfg["sale_groups"] or pending:
@@ -1093,11 +1159,42 @@ class BoilAutoBuyer:
         self.armed[url]["hidden_seen"] = time.monotonic()
         return False
 
-    def interval_for(self, entry: Dict[str, Any]) -> float:
+    def presale_started(self, pid: str, name: str, url: str) -> None:
+        """A target card waiting for stock in a public sale group: tell the user once."""
+        if pid in self.presale_seen:
+            return
+        self.presale_seen[pid] = time.time()
+        cfg = self.cfg
+        LOG.info("target card %s (%s) in %s has no stock yet: hourly bursts on", pid, name, url)
+        self.notify(
+            "⏰ <b>BOIL 活动页出现目标商品，还没放货</b>：%s\n%s\n每个整点（%s 点，台湾时间）前 %d 秒到后 %d 秒"
+            "每 %g 秒看一次，有货马上下单；最长盯 %g 小时。"
+            % (html.escape(name), html.escape(url),
+               "%d–%d" % (min(cfg["burst_hours"]), max(cfg["burst_hours"])),
+               int(cfg["burst_lead_seconds"]), int(cfg["burst_tail_seconds"]), float(cfg["burst_seconds"]),
+               float(cfg["burst_max_hours"]))
+        )
+
+    def bursting(self, url: str) -> bool:
+        """Whether ``url`` shows a target card waiting for stock (within burst_max_hours)."""
+        limit = float(self.cfg["burst_max_hours"]) * 3600
+        return any(time.time() - self.presale_seen.get(pid, 0.0) <= limit for pid in self.presale.get(url, ()))
+
+    def burst_now(self) -> Tuple[bool, float]:
+        cfg = self.cfg
+        return burst_window(datetime.now(), cfg["burst_minutes"], cfg["burst_hours"],
+                            float(cfg["burst_lead_seconds"]), float(cfg["burst_tail_seconds"]))
+
+    def interval_for(self, entry: Dict[str, Any], url: Optional[str] = None) -> float:
         fast = self.switch.interval(float(self.cfg["fast_poll_seconds"]))
         if time.monotonic() - entry["since"] < float(self.cfg["fast_minutes"]) * 60:
-            return fast
-        return max(fast, float(self.cfg["slow_poll_seconds"]))
+            interval = fast
+        else:
+            interval = max(fast, float(self.cfg["slow_poll_seconds"]))
+        if url is not None and self.bursting(url):
+            inside, wait = self.burst_now()
+            return float(self.cfg["burst_seconds"]) if inside else max(0.5, min(interval, wait))
+        return interval
 
     def poll_armed(self) -> bool:
         now = time.monotonic()
@@ -1106,14 +1203,24 @@ class BoilAutoBuyer:
                 LOG.info("disarming %s (window over)", url)
                 self.armed.pop(url, None)
         due = [url for url, entry in self.armed.items() if entry["next"] <= time.monotonic()]
-        if due and any(self.armed[url]["public"] for url in due) and time.monotonic() - self.last_login_check > 600:
-            # Warm up: be logged in with an empty cart before the first order.
+        # A burst window is open for a group with a target card waiting for stock.
+        burst_open = (any(self.armed[url]["public"] and self.bursting(url) for url in due)
+                      and self.burst_now()[0])
+        fresh = float(self.cfg["burst_lead_seconds"]) + float(self.cfg["burst_tail_seconds"]) + 30
+        since_check = time.monotonic() - self.last_login_check
+        if due and any(self.armed[url]["public"] for url in due) and (
+                since_check > 600 or (burst_open and since_check > fresh)):
+            # Warm up: be logged in with an empty cart before the first order
+            # (and again as each burst starts).
             if not self.check_login():
                 for entry in self.armed.values():
                     entry["next"] = time.monotonic() + 300
                 return False
             if self.cart_dirty:
                 self.empty_cart()
+        if burst_open and (self.known_invoice is None or time.monotonic() - self.known_invoice[1] > fresh):
+            # The checkout won't have to read this during the burst.
+            self.known_invoice = (self.newest_invoice(), time.monotonic())
         for url in due:
             if self.stopping or self.switch.control.paused():
                 return False
@@ -1125,8 +1232,10 @@ class BoilAutoBuyer:
                     if not self.check_public(url):
                         entry["next"] = time.monotonic() + float(self.cfg["hidden_poll_seconds"])
                     continue
-                self.beat(state="watching", detail="检查 %s" % url)
-                result = self.attempt(url, quiet=bool(entry.get("quiet")))
+                burst = self.bursting(url) and self.burst_now()[0]
+                self.beat(state="watching", detail="%s %s" % ("整点冲刺" if burst else "检查", url))
+                result = self.attempt(url, quiet=bool(entry.get("quiet")),
+                                      spacing=float(self.cfg["burst_seconds"]) if burst else None)
             except BlockedError as exc:
                 self.notify("⛔ <b>BOIL 抢购：疑似被网站限流</b>\n%s\n暂停 30 分钟。" % html.escape(str(exc)))
                 for item in self.armed.values():
@@ -1144,8 +1253,9 @@ class BoilAutoBuyer:
                 return True
             if result == OrderResult.DROP:
                 self.armed.pop(url, None)
+                self.presale.pop(url, None)
             elif url in self.armed:
-                entry["next"] = time.monotonic() + self.interval_for(entry)
+                entry["next"] = time.monotonic() + self.interval_for(entry, url)
         return False
 
     def idle_detail(self) -> str:

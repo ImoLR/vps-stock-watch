@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import tempfile
+import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -237,6 +239,29 @@ class HelperTest(unittest.TestCase):
         self.assertFalse(ba.group_listed(category_html(public, [], empty=True), "festive-offer", BASE))
         listed = category_html(public + [("festive-offer", "節日特別提供")], [], empty=True)
         self.assertTrue(ba.group_listed(listed, "festive-offer", BASE))
+
+
+class BurstWindowTest(unittest.TestCase):
+    def window(self, *when, minutes=(0,), hours=range(8, 24)):
+        return ba.burst_window(datetime(2026, 11, 27, *when), minutes, hours, 30, 60)
+
+    def test_inside_around_the_hour(self):
+        self.assertEqual(self.window(12, 59, 30), (True, 0.0))
+        self.assertEqual(self.window(13, 0, 0), (True, 0.0))
+        self.assertEqual(self.window(13, 1, 0), (True, 0.0))
+
+    def test_seconds_until_the_next_window(self):
+        self.assertEqual(self.window(12, 59, 0), (False, 30.0))
+        self.assertEqual(self.window(13, 1, 1), (False, 3509.0))
+        self.assertEqual(self.window(13, 10, 0, minutes=(0, 30)), (False, 1170.0))
+
+    def test_hours_outside_the_list_are_skipped(self):
+        # 23:00 is the last mark; the next one is 08:00 the next morning.
+        self.assertEqual(self.window(23, 0, 30), (True, 0.0))
+        inside, wait = self.window(23, 5, 0)
+        self.assertFalse(inside)
+        self.assertEqual(wait, (8 * 3600 + 55 * 60) - 30)
+        self.assertEqual(self.window(7, 59, 40), (True, 0.0))  # 08:00's lead
 
 
 class FakeSite:
@@ -587,6 +612,78 @@ class BuyerTest(unittest.TestCase):
             buyer = self.buyer(tmp, site)
             buyer.session.request = mock.Mock(side_effect=request)
             self.assertEqual(buyer.order("540"), ba.OrderResult.WAIT)
+
+    def festive(self, site, cards):
+        """Serve festive-offer with ``cards`` (a list the test may change)."""
+        site_request = site.request
+
+        def request(method, url, **kwargs):
+            if url.endswith("store/festive-offer"):
+                site.calls.append((method, url))
+                page = category_html([("festive-offer", "節日特別提供")], cards, current="festive-offer")
+                return resp(page, BASE + "store/festive-offer")
+            return site_request(method, url, **kwargs)
+
+        return request
+
+    def test_target_card_without_stock_starts_hourly_bursts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            cards = [{"pid": 540, "name": "2027 羊年 SeedNet 300Mbps VPS", "stock": 0, "bandwidth": DYNAMIC,
+                      "cycle": ("annually", "年繳")}]
+            buyer = self.buyer(tmp, site)
+            buyer.session.request = mock.Mock(side_effect=self.festive(site, cards))
+            url = BASE + "store/festive-offer"
+            buyer.arm([url], "boilcloud_sale", True)
+            with patch.object(buyer, "burst_now", return_value=(False, 40.0)):
+                buyer.poll_armed()
+                self.assertTrue(buyer.bursting(url))
+                self.assertIn("还没放货", buyer.sent[0])
+                self.assertIsNone(site.posted_checkout)
+                # Outside a window: back no later than the window opens.
+                self.assertAlmostEqual(buyer.armed[url]["next"] - time.monotonic(), 20.0, delta=1)
+                self.assertEqual(buyer.interval_for(buyer.armed[url], url), 20.0)
+                buyer.armed[url]["since"] -= 3600  # past the fast minutes: 60 s, cut to 40
+                self.assertEqual(buyer.interval_for(buyer.armed[url], url), 40.0)
+            with patch.object(buyer, "burst_now", return_value=(True, 0.0)):
+                self.assertEqual(buyer.interval_for(buyer.armed[url], url), 3.0)
+                # The hour: stock is out. The burst warm-up already read the invoices.
+                cards[0]["stock"] = 2
+                buyer.armed[url]["next"] = 0
+                site.calls.clear()
+                buyer.poll_armed()
+            self.assertIsNotNone(site.posted_checkout)
+            submit = site.calls.index(("POST", BASE + "cart.php?a=checkout"))
+            invoice_reads = [i for i, (_, u) in enumerate(site.calls[:submit]) if "action=invoices" in u]
+            # Read once by the warm-up, before the group page; not again right before checkout.
+            self.assertEqual(len(invoice_reads), 1)
+            self.assertLess(invoice_reads[0], site.calls.index(("GET", url)))
+            self.assertEqual(json.loads((Path(tmp) / "done_seednet.json").read_text("utf-8"))["invoice"], "71")
+            self.assertLessEqual(len(buyer.sent), 4)  # told about the wait once
+            self.assertEqual(sum("还没放货" in text for text in buyer.sent), 1)
+
+    def test_blind_box_without_stock_starts_no_bursts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            cards = [{"pid": 553, "name": "2026年黑五盲盒", "stock": 0, "region": "香港：",
+                      "bandwidth": "日本： SoftBank 1G獨享 月付 美國： ATT 500M 季付"}]
+            buyer = self.buyer(tmp, site)
+            buyer.session.request = mock.Mock(side_effect=self.festive(site, cards))
+            url = BASE + "store/festive-offer"
+            buyer.arm([url], "boilcloud_sale", True)
+            buyer.poll_armed()
+            self.assertFalse(buyer.bursting(url))
+            self.assertEqual(buyer.sent, [])
+
+    def test_bursts_stop_after_the_max_hours(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            buyer = self.buyer(tmp, FakeSite())
+            url = BASE + "store/festive-offer"
+            buyer.presale = {url: ["540"]}
+            buyer.presale_seen = {"540": time.time() - 37 * 3600}
+            self.assertFalse(buyer.bursting(url))
+            buyer.presale_seen = {"540": time.time() - 3600}
+            self.assertTrue(buyer.bursting(url))
 
 
 class MonitorHookTest(unittest.TestCase):

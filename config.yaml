@@ -171,6 +171,12 @@ fac_autobuy:
 #  - promo codes posted on BOIL's channel or by staff are used (14 days);
 #    codes from ordinary group members are not. A code post only teaches
 #    the code; it arms nothing by itself.
+#  - hourly bursts (user, 2026-11-26; BOIL puts sale stock out on the hour):
+#    while the public festive-offer shows a TARGET card with no stock yet,
+#    it is read every 3 s from :59:30 to :01:00 around each full hour
+#    08-23 TW (burst_* in watcher/boil_autobuy.py), at most 36 h from the
+#    card's first sighting. Other cards (e.g. the Black Friday blind box)
+#    never start this.
 boil_autobuy:
   enabled: true
   targets:
