@@ -213,6 +213,11 @@ Provider 代码、测试和下面的说明都保留；要恢复时改回 `enable
    - 只读：不发言、不点按钮、不标已读。
    - 其他商家按同样规则转发时加在 `relays` 里（2026-11-11 起有 BOIL，见 BOILCLOUD 一节）。
      FAC 的进度仍存在 `relay_state.json` 顶层，其他商家存在 `relays.<名称>` 下。
+   - `topic_groups`（2026-11-26 起有利群聊天群 @leikwanhostchat）：按话题读群，只通知、不唤醒抢购。
+     `staff_ids`（群主 Amazing Not、销售 霖磐chin、关联频道）发的带活动词或「会聚」的消息马上转发；
+     其他群友提到「会聚/汇聚/荟聚」的消息（附被回复的那句）攒起来，每 2 小时发一份摘要
+     （攒满 30 条提前发）。每条命中同时追加到 `data/tg/leikwan_topic.jsonl`；待发摘要存在
+     `relay_state.json` 的 `topic_groups` 下，重启不丢。群打不开只记日志，不影响 FAC。
    - 会话文件、`user.env`（api_id/api_hash/手机号）、`login.py`、`relay_state.json` 都在
      `data/tg/`（0600，不进 git）。
    - 登录失效时推送“登录已失效”并以退出码 3 停止，systemd 不会无限重启。重新登录：
