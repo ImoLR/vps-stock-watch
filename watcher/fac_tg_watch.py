@@ -317,6 +317,11 @@ class TopicGroup:
         self.digest_seconds = max(600, int(item.get("digest_seconds", 7200)))
         self.digest_max_items = max(5, int(item.get("digest_max_items", 30)))
         self.log_path = base / str(item.get("log_file") or "data/tg/topic_%s.jsonl" % self.group_id)
+        # Hourly "seen/hits" log line: shows the group's updates still arrive.
+        self.seen = 0
+        self.hits = 0
+        self.counted_at = time.monotonic()
+        self.first_logged = False
 
 
 class Relay:
@@ -562,6 +567,10 @@ class FacTelegramWatch:
         group = self.topic_groups.get(int(getattr(message, "chat_id", 0) or 0))
         if group is None:
             return
+        group.seen += 1
+        if not group.first_logged:
+            group.first_logged = True
+            LOG.info("%s group: first message since start (%s)", group.name, message.id)
         text = message.raw_text or ""
         sender_id = int(message.sender_id or 0)
         fwd = getattr(message, "fwd_from", None)
@@ -572,6 +581,7 @@ class FacTelegramWatch:
         reason = topic_reason(text, trusted, group.topic_words, group.sale_words)
         if not reason:
             return
+        group.hits += 1
         reply = None
         if getattr(message, "reply_to_msg_id", None):
             try:
@@ -626,6 +636,10 @@ class FacTelegramWatch:
         while True:
             await asyncio.sleep(60)
             for group in list(self.topic_groups.values()):
+                if time.monotonic() - group.counted_at >= 3600:
+                    LOG.info("%s group last hour: %d messages seen, %d hits", group.name, group.seen, group.hits)
+                    group.seen = group.hits = 0
+                    group.counted_at = time.monotonic()
                 try:
                     if time.time() - self._topic_state(group)["last_digest"] >= group.digest_seconds:
                         await self.send_topic_digest(group)
