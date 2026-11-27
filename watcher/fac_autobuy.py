@@ -7,7 +7,10 @@ count) and the
 (see ``fac_trigger``); each trigger "arms" its links for a few hours, and
 armed links are checked one page at a time until a matching product can be
 ordered. Matching = the product name contains an include word (SeedNet),
-no exclude word (NAT), an annual plan, and a total at or under the cap.
+no exclude word (NAT), and a plan rank_plans accepts (annual-only products
+first, else a cycle at or under $28.5 a month), with today's total at or
+under the cap. Of several matching products the best per rank_plans is
+bought.
 
 Hidden links are never ordered (user, 2026-11-08): a link counts as public
 once it was posted on Telegram, or once its category is linked from the
@@ -71,8 +74,9 @@ DEFAULTS: Dict[str, Any] = {
     "cdp_port": 9291,
     "name_include": ["seednet"],
     "name_exclude": ["nat"],
-    "plan_keywords": ["年付", "年繳", "年缴", "annual", "yearly", "every year", "1 year"],
+    # Today's total (price + setup fee) of any order. Plans: see rank_plans.
     "max_total": 280.0,
+    "any_cycle_month": 28.5,
     "hostname": "seednet",
     "coupons": [],
     # A link that does not lead to a product (an announcement, the home
@@ -82,7 +86,9 @@ DEFAULTS: Dict[str, Any] = {
     "fast_poll_seconds": 20,
     "fast_minutes": 30,
     "slow_poll_seconds": 60,
-    "page_spacing_seconds": 4,
+    # Between two page loads (user, 2026-11-28: 1 s, was 4 s). goto() also
+    # waits 2 s after each load for Livewire.
+    "page_spacing_seconds": 1,
     "login_check_hours": 6,
     "max_order_failures": 3,
     # Never order a link that is still hidden (user, 2026-11-08). A link is
@@ -160,13 +166,70 @@ def name_matches(name: str, include: Iterable[str], exclude: Iterable[str]) -> b
     return True
 
 
-def choose_plan(options: Sequence[Tuple[str, str]], keywords: Iterable[str]) -> Optional[Tuple[str, str]]:
-    words = [word.casefold() for word in keywords]
-    for value, label in options:
-        text = re.sub(r"\s+", " ", label or "").casefold()
-        if value and any(word in text for word in words):
-            return value, re.sub(r"\s+", " ", label).strip()
+# Months per billing cycle, read from the plan's name (FAC names its plans:
+# "年付 - $990,00 + $30,00 Setup fee"). Longer cycles first, as 兩年付 and
+# 半年付 contain 年付; a digit right before a number word is a date ("2026年").
+_MONTHS = r"\s*(?:個月|个月|months?)"
+CYCLE_PATTERNS = [
+    (36, r"三年|(?<!\d)3\s*年|triennial|(?<!\d)3\s*years?|(?<!\d)36" + _MONTHS),
+    (24, r"[兩两二]年|(?<!\d)2\s*年|biennial|(?<!\d)2\s*years?|(?<!\d)24" + _MONTHS),
+    (6, r"半年|semi-?annual|half[- ]?year|(?<!\d)6" + _MONTHS),
+    (12, r"年[付繳缴費费度]|包年|一年|每年|(?<!\d)1\s*年|^年$|annual|yearly|every\s*year|(?<!\d)1\s*year\b|(?<!\d)12" + _MONTHS),
+    (3, r"季|quarter|(?<!\d)3" + _MONTHS),
+    (1, r"月[付繳缴費费]|包月|^月$|monthly|\bmonth\b|(?<!\d)1" + _MONTHS),
+]
+ANNUAL_ONLY = "只有年付"
+MULTI_CYCLE = "多周期"
+
+
+def plan_months(label: str) -> Optional[int]:
+    """Months of one billing cycle from a plan label, None if unknown."""
+    name = re.sub(r"\s+", " ", (label or "").split(" - ")[0]).strip().casefold()
+    for months, pattern in CYCLE_PATTERNS:
+        if re.search(pattern, name):
+            return months
     return None
+
+
+def rank_plans(
+    options: Sequence[Tuple[str, str]], max_month: float
+) -> Tuple[str, List[Tuple[str, str, int, float]], str]:
+    """(rule, plans worth trying best first, why none) for a product's plans.
+
+    User, 2026-11-28 (same as BOIL's SeedNet rule): a product sold annually
+    only comes first; its annual plan is bought, cheapest first, capped
+    only by the total. A product that also sells shorter cycles is bought
+    only if a cycle comes to at most ``max_month`` a month (today's price +
+    setup fee over the cycle's months; a regular restock runs ~$38-55/month),
+    cheapest per month first, a tie going to the longer cycle. A plan whose
+    cycle can't be read is never bought, and keeps a product from counting
+    as annual-only (it may be monthly). Entries: (value, label, months,
+    listed per month).
+    """
+    plans, unknown = [], []
+    for value, label in options:
+        text = re.sub(r"\s+", " ", label or "").strip()
+        if not value:
+            continue
+        months, total = plan_months(text), sum(money_amounts(text))
+        if months is None or total <= 0:
+            unknown.append(text)
+            continue
+        plans.append((value, text, months, round(total / months, 2)))
+    if not plans:
+        return MULTI_CYCLE, [], "认不出付款周期：%s" % ("、".join(unknown) or "没有选项")
+    if not unknown and any(p[2] == 12 for p in plans) and not any(p[2] < 12 for p in plans):
+        annual = sorted((p for p in plans if p[2] == 12), key=lambda p: p[3])
+        return ANNUAL_ONLY, annual, ""
+    ranked = sorted(plans, key=lambda p: (p[3], -p[2]))
+    fit = [p for p in ranked if p[3] <= max_month]
+    why = "" if fit else "最便宜的是 %s，折合每月 $%.2f（上限 $%g/月）" % (ranked[0][1], ranked[0][3], max_month)
+    return MULTI_CYCLE, fit, why
+
+
+def offer_rank(offer: Dict[str, Any]) -> Tuple[int, float]:
+    """Annual-only products first, then the cheapest per month."""
+    return (0 if offer["rule"] == ANNUAL_ONLY else 1, offer["plans"][0][3])
 
 
 def classify_url(url: str, base_url: str) -> Tuple[str, Optional[str]]:
@@ -380,8 +443,8 @@ class FacAutoBuyer:
         self.base_url = str(cfg["base_url"])
         self.include = [str(v) for v in cfg["name_include"]]
         self.exclude = [str(v) for v in cfg["name_exclude"]]
-        self.plan_keywords = [str(v) for v in cfg["plan_keywords"]]
         self.max_total = float(cfg["max_total"])
+        self.any_cycle_month = float(cfg["any_cycle_month"])
         self.marker_path = Path(str(cfg["marker_file"]))
         self.trigger_dir = str(cfg["trigger_dir"])
         account_file = Path(str(cfg["account_file"]))
@@ -413,8 +476,8 @@ class FacAutoBuyer:
             STATUS_DIR,
             NAME,
             "FAC SeedNet 年付",
-            "名称含 %s、不含 %s，年付，总价 ≤ $%g，余额付款"
-            % ("/".join(self.include), "/".join(self.exclude), self.max_total),
+            "名称含 %s、不含 %s；只有年付的优先，多周期折合每月 ≤ $%g；总价 ≤ $%g，余额付款"
+            % ("/".join(self.include), "/".join(self.exclude), self.any_cycle_month, self.max_total),
             float(cfg["fast_poll_seconds"]),
         )
         self.switch = Switch(Control(STATUS_DIR, NAME), self.marker_path, self.beat)
@@ -542,35 +605,69 @@ class FacAutoBuyer:
         return found, names
 
     def order(self, checkout_url: str, test: bool = False) -> str:
-        if self.unconfirmed_checkout:
-            # A checkout that never answered may still have created an order:
-            # never order twice.
-            if self.open_new_invoice():
-                self.unconfirmed_checkout = False
-                return self.record_order(checkout_url, "（上次结账超时后补查到）", "?", None, True, test)
-            self.unconfirmed_checkout = False
+        result, offer = self.read_offer(checkout_url, test)
+        return self.buy_offer(offer, test) if offer else result
+
+    def recover_unconfirmed(self, checkout_url: str, test: bool) -> Optional[str]:
+        """A checkout that never answered may still have created an order:
+        look for it before ordering anything again (never order twice)."""
+        if not self.unconfirmed_checkout:
+            return None
+        found = self.open_new_invoice()
+        self.unconfirmed_checkout = False
+        if found:
+            return self.record_order(checkout_url, "（上次结账超时后补查到）", "?", None, True, test)
+        return None
+
+    def open_checkout(self, checkout_url: str) -> bool:
+        """Load a checkout page, signing in if needed; False if it isn't orderable now."""
         status = self.goto(checkout_url)
         if "/login" in self.page.url:
             if not self.ensure_login():
                 self.notify("⚠️ <b>FAC 抢购：有链接但登录失效</b>\n%s" % html.escape(checkout_url))
-                return OrderResult.WAIT
+                return False
             status = self.goto(checkout_url)
-        if status == 404 or "/checkout" not in urlparse(self.page.url).path:
-            return OrderResult.WAIT  # sold out or not open yet
+        return status != 404 and "/checkout" in urlparse(self.page.url).path  # else sold out / not open
+
+    def read_offer(self, checkout_url: str, test: bool = False) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """(result, None) if ``checkout_url`` can't be bought, else ("", offer)."""
+        if not self.open_checkout(checkout_url):
+            return OrderResult.WAIT, None
         root = self.page.locator('[wire\\:name="products.checkout"]')
         name = re.sub(r"\s+", " ", root.locator("h1").first.inner_text()).strip()
         if not test and not name_matches(name, self.include, self.exclude):
             LOG.info("%s is %r, not a target", checkout_url, name)
-            return OrderResult.DROP
+            return OrderResult.DROP, None
         options = self.page.eval_on_selector_all(
             'select[wire\\:model\\.live="plan_id"] option',
             "os => os.map(o => [o.value, o.textContent])",
         )
-        plan = choose_plan([(v, t) for v, t in options], self.plan_keywords)
-        if plan is None:
-            LOG.info("%s (%s) has no annual plan: %s", checkout_url, name, options)
-            return OrderResult.DROP
-        self.page.select_option('select[wire\\:model\\.live="plan_id"]', plan[0])
+        # A test order may take any readable cycle (public items are monthly).
+        rule, plans, why = rank_plans(options, float("inf") if test else self.any_cycle_month)
+        LOG.info("%s (%s): %s, plans %s", checkout_url, name, rule, plans or why)
+        if not plans:
+            self.notify_skip(checkout_url, "找到 %s，但没有符合条件的付款周期，不下单" % name, why)
+            return OrderResult.DROP, None
+        return "", {"url": checkout_url, "name": name, "rule": rule, "plans": plans}
+
+    def notify_skip(self, checkout_url: str, title: str, why: str) -> None:
+        if checkout_url in self.price_notified:
+            return
+        self.price_notified.add(checkout_url)
+        self.notify("💸 <b>FAC：%s</b>\n%s\n%s" % (html.escape(title), html.escape(why), html.escape(checkout_url)))
+
+    def buy_offer(self, offer: Dict[str, Any], test: bool = False) -> str:
+        """Order the best plan of an offer from read_offer."""
+        checkout_url, name, rule = offer["url"], offer["name"], offer["rule"]
+        recovered = self.recover_unconfirmed(checkout_url, test)
+        if recovered:
+            return recovered
+        if urlparse(self.page.url).path.rstrip("/") != urlparse(checkout_url).path.rstrip("/"):
+            if not self.open_checkout(checkout_url):
+                return OrderResult.WAIT
+        value, label, months, _ = offer["plans"][0]
+        root = self.page.locator('[wire\\:name="products.checkout"]')
+        self.page.select_option('select[wire\\:model\\.live="plan_id"]', value)
         time.sleep(2)
         hostname = self.page.locator('input[name="checkoutConfig.hostname"]')
         if hostname.count() and not hostname.first.input_value():
@@ -582,18 +679,20 @@ class FacAutoBuyer:
         total_match = re.search(r"Total today:?\s*(\$\s*[\d.,]+)", self.body_text())
         total = parse_money(total_match.group(1)) if total_match else None
         if total is None:
-            total = sum(money_amounts(plan[1])) or None
-        LOG.info("checkout %s: %s, plan %s, total %s", checkout_url, name, plan[1], total)
-        if not test and (total is None or total > self.max_total):
-            if checkout_url not in self.price_notified:
-                self.price_notified.add(checkout_url)
-                self.notify(
-                    "💸 <b>FAC：找到 %s 年付，但超过价格上限，不下单</b>\n%s\n今日总价 %s（上限 $%g）\n%s"
-                    % (html.escape(name), html.escape(plan[1]), total, self.max_total,
-                       html.escape(checkout_url))
-                )
-            return OrderResult.DROP
-        self.beat(state="ordering", detail="正在下单 %s %s" % (name, plan[1]))
+            total = sum(money_amounts(label)) or None
+        LOG.info("checkout %s: %s, %s plan %s, total %s", checkout_url, name, rule, label, total)
+        if not test:
+            why = ""
+            if total is None:
+                why = "读不到今日总价"
+            elif total > self.max_total:
+                why = "今日总价 $%.2f，超过上限 $%g" % (total, self.max_total)
+            elif rule == MULTI_CYCLE and total / months > self.any_cycle_month:
+                why = "今日总价 $%.2f，折合每月 $%.2f，超过 $%g/月" % (total, total / months, self.any_cycle_month)
+            if why:
+                self.notify_skip(checkout_url, "找到 %s（%s），但价格不符合，不下单" % (name, label), why)
+                return OrderResult.DROP
+        self.beat(state="ordering", detail="正在下单 %s %s" % (name, label))
         button.first.click()
         try:
             self.page.wait_for_url(lambda url: "/checkout" not in url, timeout=20000)
@@ -604,7 +703,7 @@ class FacAutoBuyer:
         time.sleep(2)
         if "/cart" not in self.page.url:
             return self.order_failed(checkout_url, name, "没进购物车，停在 %s" % self.page.url)
-        return self.checkout_cart(checkout_url, name, plan[1], test)
+        return self.checkout_cart(checkout_url, name, label, test)
 
     def checkout_cart(self, checkout_url: str, name: str, plan_label: str, test: bool) -> str:
         # Leftovers from an earlier failed run would be billed too: keep only
@@ -873,10 +972,19 @@ class FacAutoBuyer:
             if found is None:
                 return OrderResult.WAIT
             LOG.info("category %s open: %d cards, %d matching", url, len(names), len(found))
+            # Read every matching product's plans first, then buy the best
+            # (user, 2026-11-28: annual-only first, else the cheapest).
+            offers = []
             for name, checkout_url in found:
-                result = self.order(checkout_url)
+                offer = self.read_offer(checkout_url)[1]
+                if offer:
+                    offers.append(offer)
+            for offer in sorted(offers, key=offer_rank):
+                result = self.buy_offer(offer)
                 if result == OrderResult.BOUGHT:
                     return result
+                if self.unconfirmed_checkout:
+                    break  # find out about that checkout before another order
             return OrderResult.WAIT
         if kind == "checkout" and target:
             return self.order(target)

@@ -8,12 +8,16 @@ from unittest.mock import patch
 
 from watcher.fac_autobuy import (
     CREDIT_OPTION,
-    choose_plan,
+    FacAutoBuyer,
+    OrderResult,
     classify_url,
     invoice_state,
     listed_category,
     money_amounts,
     name_matches,
+    offer_rank,
+    plan_months,
+    rank_plans,
     parse_money,
     public_wait,
     trigger_is_public,
@@ -78,16 +82,92 @@ class MatchTest(unittest.TestCase):
         self.assertTrue(name_matches("Seednet Signature VDS", include, ["nat"]))
         self.assertTrue(name_matches("Seednet International", include, ["nat"]))
 
-    def test_choose_annual_plan(self):
-        options = [
-            ("30", "月付 - $99,00\n + $30,00 Setup fee"),
-            ("31", "年付 - $990,00\n + $30,00 Setup fee"),
-            ("32", "季付 - $285,00"),
-        ]
-        keywords = ["年付", "annual", "every year"]
-        self.assertEqual(choose_plan(options, keywords), ("31", "年付 - $990,00 + $30,00 Setup fee"))
-        self.assertIsNone(choose_plan(options[:1] + options[2:], keywords))
-        self.assertEqual(choose_plan([("7", "Annually - $246,99")], ["annual"])[0], "7")
+    def test_plan_months(self):
+        cases = {
+            "月付 - $25,00": 1, "Monthly - $25,00": 1, "季付 - $70,00": 3, "Quarterly": 3,
+            "半年付 - $140,00": 6, "Semi-Annually": 6, "年付 - $990,00": 12, "年繳": 12,
+            "Annually - $246,99": 12, "黑五年付特惠 - $258,99": 12, "兩年付 - $500,00": 24,
+            "两年付": 24, "Biennially": 24, "三年付": 36, "Triennially": 36, "12個月": 12,
+            "3個月": 3, "2026 黑五 - $258,99": None, "Black Friday 2026": None,
+        }
+        for label, months in cases.items():
+            self.assertEqual(plan_months(label), months, label)
+
+    def test_annual_only_comes_first_and_takes_the_cheapest_annual(self):
+        rule, plans, _ = rank_plans([
+            ("41", "年付 - $299,00\n + $3,00 Setup fee"),
+            ("42", "年付 - $258,99"),
+            ("43", "兩年付 - $500,00"),
+        ], 28.5)
+        self.assertEqual(rule, "只有年付")
+        self.assertEqual([p[0] for p in plans], ["42", "41"])  # never the 2-year plan
+        # Annual-only is capped by the total only, not per month.
+        self.assertEqual(rank_plans([("1", "年付 - $360,00")], 28.5)[1][0][3], 30.0)
+
+    def test_several_cycles_need_28_5_a_month(self):
+        # A regular restock: ~$38/month, $380/year -> nothing.
+        rule, plans, why = rank_plans([
+            ("30", "月付 - $37,99\n + $3,00 Setup fee"),
+            ("31", "年付 - $379,90\n + $3,00 Setup fee"),
+        ], 28.5)
+        self.assertEqual((rule, plans), ("多周期", []))
+        self.assertIn("31.91", why)
+        # A sale: the cheapest per month is bought, a tie goes to the longer cycle.
+        rule, plans, _ = rank_plans([
+            ("30", "月付 - $27,00"),
+            ("31", "季付 - $81,00"),
+            ("32", "年付 - $350,00"),  # $29.17/month: too dear
+        ], 28.5)
+        self.assertEqual([p[0] for p in plans], ["31", "30"])
+
+    def test_unknown_cycle_is_never_bought_and_blocks_annual_only(self):
+        # $360/year would pass as annual-only; with an unknown plan beside it,
+        # it is held to $28.5/month and fails.
+        rule, plans, _ = rank_plans([("1", "年付 - $360,00"), ("2", "特惠 - $25,00")], 28.5)
+        self.assertEqual((rule, plans), ("多周期", []))
+        self.assertEqual(rank_plans([("2", "特惠 - $25,00")], 28.5)[1], [])
+
+    def test_offer_rank(self):
+        annual = {"rule": "只有年付", "plans": [("1", "年付", 12, 25.0)]}
+        cheap = {"rule": "多周期", "plans": [("2", "月付", 1, 20.0)]}
+        dearer = {"rule": "多周期", "plans": [("3", "月付", 1, 27.0)]}
+        self.assertEqual(sorted([dearer, cheap, annual], key=offer_rank), [annual, cheap, dearer])
+
+
+class CategoryOrderTest(unittest.TestCase):
+    def buyer(self, offers, results):
+        buyer = FacAutoBuyer.__new__(FacAutoBuyer)
+        buyer.base_url, buyer.unconfirmed_checkout, buyer.bought = BASE, False, []
+        cards = [("SeedNet %s" % key, "https://fachost.cloud/products/s/%s/checkout" % key) for key in offers]
+        buyer.scan_category = lambda url: (cards, [name for name, _ in cards])
+        buyer.read_offer = lambda url: ("", offers[url.split("/")[-2]])
+
+        def buy(offer):
+            buyer.bought.append(offer["url"])
+            result, unconfirmed = results.pop(0)
+            buyer.unconfirmed_checkout = unconfirmed
+            return result
+        buyer.buy_offer = buy
+        return buyer
+
+    def offer(self, key, rule, per_month):
+        return {"url": key, "rule": rule, "plans": [("1", "x", 12, per_month)]}
+
+    def test_annual_only_is_tried_first_then_the_cheapest(self):
+        offers = {
+            "a": self.offer("a", "多周期", 20.0),
+            "b": self.offer("b", "只有年付", 25.0),
+            "c": self.offer("c", "多周期", 27.0),
+        }
+        buyer = self.buyer(offers, [(OrderResult.WAIT, False), (OrderResult.BOUGHT, False)])
+        self.assertEqual(buyer.attempt("https://fachost.cloud/products/special-regulations"), OrderResult.BOUGHT)
+        self.assertEqual(buyer.bought, ["b", "a"])
+
+    def test_an_unconfirmed_checkout_stops_further_orders(self):
+        offers = {"a": self.offer("a", "只有年付", 25.0), "b": self.offer("b", "多周期", 20.0)}
+        buyer = self.buyer(offers, [(OrderResult.WAIT, True)])
+        self.assertEqual(buyer.attempt("https://fachost.cloud/products/special-regulations"), OrderResult.WAIT)
+        self.assertEqual(buyer.bought, ["a"])
 
 
 class UrlTest(unittest.TestCase):

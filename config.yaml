@@ -142,14 +142,18 @@ fac_tg_watch:
 # 2026-11-08). It never polls on its own: the TG relay above and the
 # fachost_sale provider drop triggers, and each trigger arms its links for
 # arm_minutes (polled every fast_poll_seconds for fast_minutes, then every
-# slow_poll_seconds). Buys ONE SeedNet (not NAT) annual plan with a total
-# today <= max_total, paid from the account balance, then pauses itself.
+# slow_poll_seconds). Buys ONE SeedNet (not NAT) plan with a total today <=
+# max_total, paid from the account balance, then pauses itself. Plans (user,
+# 2026-11-28, as BOIL's SeedNet rule): an annual-only product comes first
+# (its cheapest annual plan); a product with shorter cycles only if a cycle
+# comes to <= any_cycle_month a month (total incl. setup fee / months).
 # Login lives in the Chromium profile (data/fac_profile, not in git).
 fac_autobuy:
   enabled: true
   name_include: [seednet]
   name_exclude: [nat]
   max_total: 300
+  any_cycle_month: 28.5
   coupons: []
   default_urls:
     - https://fachost.cloud/products/special-regulations
