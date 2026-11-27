@@ -851,8 +851,10 @@ systemd-run --unit nexkr-autobuy --working-directory "$PWD" \
   TG 发账单链接让你手动付。
 
 账号在 `data/fac_account.env`（`FAC_EMAIL`/`FAC_PASSWORD`），登录状态在 Chromium 资料目录
-`data/fac_profile/`，都是 0600/0700，不进 git。`paymenter_remember` cookie 有效 30 天，过期后
-程序会自己重新登录。手动命令（要套 `xvfb-run`）：
+`data/fac_profile/`，都是 0600/0700，不进 git。`paymenter_remember` cookie 有效 30 天（从登录那天算，访问不会延长），过期后
+程序会自己重新登录。另外白天查登录时发现它 48 小时内到期（`relogin_before_hours`），就先主动重新登录一次：只删本程序的
+session/remember cookie 再登录（不点退出，免得你自己设备上的登录也失效），成功后 TG 报新的到期时间；
+失败就放回旧 cookie，6 小时后再试。第一次会在 2026-12-07 09:05（旧的 12-08 22:43 到期）。手动命令（要套 `xvfb-run`）：
 
 ```bash
 xvfb-run -a .venv/bin/python -m watcher.fac_autobuy --check-login

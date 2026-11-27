@@ -58,7 +58,7 @@ from .autobuy_status import Control, Heartbeat, Switch
 from .config import load_config, telegram_credentials
 from .fac_trigger import DEFAULT_DIR as TRIGGER_DIR
 from .fac_trigger import take_triggers
-from .quiet_hours import in_quiet_hours, parse_quiet_hours
+from .quiet_hours import TAIPEI, in_quiet_hours, parse_quiet_hours
 from .telegram import TelegramClient, TelegramError
 
 
@@ -90,6 +90,12 @@ DEFAULTS: Dict[str, Any] = {
     # waits 2 s after each load for Livewire.
     "page_spacing_seconds": 1,
     "login_check_hours": 6,
+    # "Remember me" lasts 30 days from the login and visits don't extend it
+    # (user, 2026-11-28): a login check that finds it ending within this many
+    # hours signs in afresh, so the renewal happens on a daytime check with
+    # room for retries instead of at expiry (on 2026-12-07 09:05 for the first
+    # one). 0 = off.
+    "relogin_before_hours": 48,
     "max_order_failures": 3,
     # Never order a link that is still hidden (user, 2026-11-08). A link is
     # public once it was posted on Telegram, or once its category shows up
@@ -560,9 +566,53 @@ class FacAutoBuyer:
             time.sleep(1)
         return False
 
+    def remember_expiry(self) -> Optional[float]:
+        """Epoch expiry of the "remember me" cookie, None if there is none."""
+        expiries = [
+            float(cookie.get("expires") or 0)
+            for cookie in self.page.context.cookies(self.base_url)
+            if "remember" in cookie.get("name", "").casefold()
+        ]
+        return max(expiries) if expiries and max(expiries) > 0 else None
+
+    def relogin(self, left: float) -> bool:
+        """Sign in afresh for a new 30-day "remember me". Only our session
+        and remember cookies are dropped (no logout: logging out would cycle
+        the account's remember token and sign out the user's own devices);
+        if the new login fails they are put back, so the old one still
+        holds until it ends."""
+        LOG.info("remember-me ends in %.1f h: signing in afresh", left / 3600)
+        context = self.page.context
+        names = re.compile(r"remember|session", re.I)
+        saved = [cookie for cookie in context.cookies() if names.search(cookie.get("name", ""))]
+        context.clear_cookies(name=names)
+        self.goto(urljoin(self.base_url, "account"))
+        ok = self.ensure_login()
+        until = self.remember_expiry() if ok else None
+        if not (ok and until and until - time.time() > left + 3600):
+            LOG.warning("fresh login failed: restoring the old cookies")
+            context.clear_cookies(name=names)
+            context.add_cookies(saved)
+            ok = False
+        if ok:
+            self.notify(
+                "🔑 <b>FAC 抢购：「记住我」快到期，已主动重新登录</b>\n新的到期时间 %s（台湾时间）"
+                % datetime.fromtimestamp(until, TAIPEI).strftime("%Y-%m-%d %H:%M")
+            )
+            return True
+        self.notify(
+            "⚠️ <b>FAC 抢购：「记住我」%.0f 小时后到期，主动重新登录没成功</b>\n"
+            "下次查登录（6 小时后）会再试；到期前一直不行就请找 Claude 用远程浏览器登录。" % (left / 3600)
+        )
+        return False
+
     def check_login(self) -> bool:
         self.goto(urljoin(self.base_url, "account"))
         if "/login" not in self.page.url:
+            before = float(self.cfg["relogin_before_hours"]) * 3600
+            until = self.remember_expiry()
+            if before > 0 and until is not None and until - time.time() < before:
+                return self.relogin(until - time.time())
             return True
         ok = self.ensure_login()
         if ok:

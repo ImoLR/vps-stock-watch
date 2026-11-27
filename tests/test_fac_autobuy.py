@@ -170,6 +170,71 @@ class CategoryOrderTest(unittest.TestCase):
         self.assertEqual(buyer.bought, ["a"])
 
 
+class FakeContext:
+    def __init__(self, cookies):
+        self.jar = list(cookies)
+
+    def cookies(self, url=None):
+        return list(self.jar)
+
+    def clear_cookies(self, name=None):
+        self.jar = [c for c in self.jar if not (name and name.search(c["name"]))]
+
+    def add_cookies(self, cookies):
+        self.jar.extend(cookies)
+
+
+class ReloginTest(unittest.TestCase):
+    def buyer(self, remember_left_h, login_works):
+        now = 1_800_000_000.0
+        buyer = FacAutoBuyer.__new__(FacAutoBuyer)
+        buyer.base_url, buyer.cfg, buyer.sent = BASE, {"relogin_before_hours": 48}, []
+        context = FakeContext([
+            {"name": "paymenter_remember", "expires": now + remember_left_h * 3600},
+            {"name": "paymenter_session", "expires": now + 7200},
+            {"name": "cf_clearance", "expires": now + 86400},
+        ])
+
+        class Page:
+            url = "https://fachost.cloud/account"
+        Page.context = context
+
+        class Chrome:
+            page = Page()
+        buyer.chrome = Chrome()
+        buyer.goto = lambda url: None
+        buyer.notify = buyer.sent.append
+
+        def login():
+            if login_works:
+                context.add_cookies([{"name": "paymenter_remember", "expires": now + 30 * 86400}])
+            return login_works
+        buyer.ensure_login = login
+        return buyer, context, now
+
+    def test_far_from_expiry_does_nothing(self):
+        buyer, context, now = self.buyer(100, True)
+        with patch("watcher.fac_autobuy.time.time", return_value=now):
+            self.assertTrue(buyer.check_login())
+        self.assertEqual((buyer.sent, len(context.jar)), ([], 3))
+
+    def test_near_expiry_signs_in_afresh(self):
+        buyer, context, now = self.buyer(37, True)
+        with patch("watcher.fac_autobuy.time.time", return_value=now):
+            self.assertTrue(buyer.check_login())
+        self.assertEqual(sorted(c["name"] for c in context.jar), ["cf_clearance", "paymenter_remember"])
+        self.assertEqual(buyer.remember_expiry(), now + 30 * 86400)
+        self.assertIn("已主动重新登录", buyer.sent[0])
+
+    def test_failed_login_restores_the_old_cookies(self):
+        buyer, context, now = self.buyer(37, False)
+        with patch("watcher.fac_autobuy.time.time", return_value=now):
+            self.assertFalse(buyer.check_login())
+        self.assertEqual(len(context.jar), 3)
+        self.assertEqual(buyer.remember_expiry(), now + 37 * 3600)
+        self.assertIn("没成功", buyer.sent[0])
+
+
 class UrlTest(unittest.TestCase):
     def test_classify(self):
         self.assertEqual(

@@ -167,6 +167,10 @@ fac_autobuy:
   # fixed from the login) restores the 2 h session on any visit, so the
   # check keeps nothing alive. TG links still arm the buyer at night.
   quiet_hours: "00:05-09:05"
+  # 2026-11-28 (user): a daytime login check that finds "remember me" ending
+  # within 48 h signs in afresh (new 30 days; old cookies kept if it fails).
+  # First one: 2026-12-07 09:05 (remember-me from 11-08 ends 12-08 22:43).
+  relogin_before_hours: 48
 
 # BOILCLOUD auto-buyer (watcher.boil_autobuy, deploy/boil-autobuy.service;
 # user, 2026-11-11). Plain HTTP (WHMCS, no captcha), no browser. Woken by the
