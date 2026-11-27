@@ -898,7 +898,8 @@ class BoilAutoBuyer:
             self.last_page_at = time.monotonic()
             response = self._send(session, method, urljoin(self.base_url, url), **kwargs)
         if response.status_code in (403, 429) or is_challenge_page(response.text):
-            raise BlockedError("HTTP %s for %s" % (response.status_code, url))
+            raise BlockedError("HTTP %s for %s%s" % (response.status_code, url,
+                                                     " (Cloudflare challenge)" if cf_challenge(response) else ""))
         if not public:
             self._save_cookies()
         return response
@@ -962,19 +963,25 @@ class BoilAutoBuyer:
         cookie = None
         try:
             chrome.start()
+            # The profile keeps the last cf_clearance: while it is still good
+            # Cloudflare lets the page through without a new one, and the
+            # "renewed" cookie would be the old one, dying at its old time
+            # (2026-11-27 21:54: "renewed", challenged 3 min later).
+            chrome.page.context.clear_cookies(name="cf_clearance")
             chrome.page.goto(urljoin(self.base_url, "cart.php?a=view"), wait_until="domcontentloaded", timeout=40000)
             # Passed: the cookie is set and the shop's own page is back (on the
             # way the title is briefly a token, and the page navigates).
             deadline = now + float(self.cfg["clearance_timeout_seconds"])
             while time.monotonic() < deadline:
                 time.sleep(1)
-                cookie = next((item for item in chrome.page.context.cookies(self.base_url)
-                               if item["name"] == "cf_clearance"), None)
+                found = next((item for item in chrome.page.context.cookies(self.base_url)
+                              if item["name"] == "cf_clearance"), None)
                 try:
                     title = chrome.page.title()
                 except Exception:  # navigating
                     title = ""
-                if cookie is not None and "boilcloud" in title.lower():
+                if found is not None and "boilcloud" in title.lower():
+                    cookie = found  # only a page that really passed counts
                     break
             # The user agent the page really sends (Chrome reduces it to
             # Chrome/N.0.0.0; the clearance is tied to that exact string).
@@ -993,7 +1000,7 @@ class BoilAutoBuyer:
         finally:
             chrome.stop()
         if cookie is None:
-            LOG.warning("no cf_clearance after %.0fs", time.monotonic() - now)
+            LOG.warning("Cloudflare's challenge not passed after %.0fs", time.monotonic() - now)
             return False
         self._apply_clearance(ua, cookie)
         self.clearance_at = time.time()

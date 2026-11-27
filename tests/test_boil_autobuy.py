@@ -757,6 +757,41 @@ class BuyerTest(unittest.TestCase):
             buyer.notified.clear()
             self.assertEqual(buyer.order("311"), ba.OrderResult.BOUGHT)
 
+    def test_renewal_drops_the_old_cookie_and_needs_a_passed_page(self):
+        class FakeChrome:
+            def __init__(self, titles, *args):
+                self.jar = [{"name": "cf_clearance", "value": "old", "domain": ".cloud.boil.network"}]
+                self.titles = titles
+                self.page = mock.Mock()
+                self.page.context.clear_cookies.side_effect = lambda name: self.jar.clear()
+                self.page.context.cookies.side_effect = lambda url: list(self.jar)
+                self.page.goto.side_effect = lambda *a, **k: self.jar.append(
+                    {"name": "cf_clearance", "value": "new", "domain": ".cloud.boil.network"}) if titles else None
+                self.page.title.side_effect = lambda: titles.pop(0) if titles else "Just a moment..."
+                self.page.evaluate.return_value = "Mozilla/5.0 Chrome/148.0.0.0"
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+        import watcher.fac_autobuy as fa
+        with tempfile.TemporaryDirectory() as tmp:
+            buyer = self.buyer(tmp, FakeSite())
+            buyer.cfg["clearance_timeout_seconds"] = 3
+            with patch.dict(ba.os.environ, {"DISPLAY": ":99"}), patch.object(ba.time, "sleep"), \
+                    patch.object(fa, "chrome_executable", return_value="chromium"):
+                with patch.object(fa, "ChromeSession", lambda *a: FakeChrome(["Just a moment...", "購物車 - BOILCLOUD"])):
+                    self.assertTrue(buyer.refresh_clearance())
+                self.assertEqual(buyer.session.cookies.get("cf_clearance"), "new")
+                # The challenge never cleared: the old cookie is not taken as new.
+                buyer.clearance_tried = float("-inf")
+                buyer.cfg["clearance_timeout_seconds"] = 0.05
+                with patch.object(fa, "ChromeSession", lambda *a: FakeChrome([])):
+                    self.assertFalse(buyer.refresh_clearance())
+                self.assertEqual(buyer.session.cookies.get("cf_clearance"), "new")
+
     def test_old_clearance_is_renewed_before_a_sale(self):
         with tempfile.TemporaryDirectory() as tmp:
             buyer = self.buyer(tmp, FakeSite())
