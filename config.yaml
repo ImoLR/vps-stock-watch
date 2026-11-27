@@ -158,6 +158,9 @@ fac_autobuy:
   fast_minutes: 30
   slow_poll_seconds: 60
   login_check_hours: 6
+  # 2026-11-28 (user): no login check 00:05-09:05 Taiwan time, one at 09:05.
+  # TG links still arm the buyer at night.
+  quiet_hours: "00:05-09:05"
 
 # BOILCLOUD auto-buyer (watcher.boil_autobuy, deploy/boil-autobuy.service;
 # user, 2026-11-11). Plain HTTP (WHMCS, no captcha), no browser. Woken by the
@@ -212,6 +215,10 @@ boil_autobuy:
   login_check_hours: 12
   # Through TCS SeedNet (dynamic IP, can be changed): boil-egress.service.
   proxy: socks5://127.0.0.1:1082
+  # 2026-11-28 (user): no BOIL request overnight (TG still notifies, its links
+  # are dropped); at 09:05 the clearance is renewed and the login checked,
+  # then renewed every 20-27 min as usual. The 04:00 IP change falls inside.
+  quiet_hours: "00:05-09:05"
 
 suspicious_keywords:
   - test
@@ -225,7 +232,8 @@ providers:
     type: nexkr
     enabled: true
     catalog_url: https://nexkr.sh/api/v1/shop/groups
-    interval_seconds: 60
+    # 2026-11-28 (user): 5 min, the NexKr buy is done (TG override was 300 already).
+    interval_seconds: 300
     timeout_seconds: 25
     max_backoff_seconds: 1800
 
@@ -234,7 +242,8 @@ providers:
   - name: nnb
     type: nnb
     enabled: true
-    interval_seconds: 60
+    # 2026-11-28 (user): 5 min, the NewNB buy is done (TG override was 120).
+    interval_seconds: 300
     timeout_seconds: 20
     max_backoff_seconds: 1800
 
@@ -356,6 +365,10 @@ providers:
     # 2026-11-24 (user): only festive-offer (+ TG). Sale plans are always
     # put there, never in the regular Taiwan/Japan/USA groups, so those are
     # not read (watch_groups, the code is kept, was the 3 Taiwan groups).
+    # 2026-11-28 (user): no sale at night, and the TCS SeedNet exit changes
+    # its IP at 04:00 anyway: no request from 00:05 to 09:05 Taiwan time (the
+    # TG relay keeps notifying). Same window as boil_autobuy.
+    quiet_hours: "00:05-09:05"
     feed_every_rounds: 3
     probe_ahead: 2
     feed_start_pid: 528
@@ -397,6 +410,9 @@ providers:
     # is the sale page opening or closing (the hidden-link heads-up); item
     # stock / price changes are silent, the buyer reports what it finds.
     notify_only_events: [sale_category]
+    # 2026-11-28 (user): no sale at night: no request 00:05-09:05 Taiwan time
+    # (the TG relay keeps watching @fachost_cloud and still wakes the buyer).
+    quiet_hours: "00:05-09:05"
     timeout_seconds: 25
     request_spacing_seconds: 5
     max_backoff_seconds: 3600

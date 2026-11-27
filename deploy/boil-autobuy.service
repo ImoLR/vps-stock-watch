@@ -16,7 +16,9 @@ Environment=PLAYWRIGHT_BROWSERS_PATH=/root/projects/vps-stock-watch/vps-stock-wa
 ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x900x24" /root/projects/vps-stock-watch/vps-stock-watch/.venv/bin/python -m watcher.boil_autobuy --config /root/projects/vps-stock-watch/vps-stock-watch/config.yaml
 Restart=on-failure
 RestartSec=1min
-MemoryMax=700M
+# Chromium peaks ~700 MB while renewing the clearance (708 MB seen 2026-11-28
+# on an 8 GB host, where swap no longer squeezes it).
+MemoryMax=1200M
 KillMode=mixed
 TimeoutStopSec=40
 

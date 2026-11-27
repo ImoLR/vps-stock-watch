@@ -26,6 +26,7 @@ from .isolated_scan import fetch_products_isolated, terminate_active_scans
 from .models import Product
 from .providers import build_provider
 from .providers.base import BaseProvider
+from .quiet_hours import in_quiet_hours, parse_quiet_hours
 from .route_watch import (
     MisakaRouteWatcher,
     RouteStateStore,
@@ -90,6 +91,7 @@ class WatcherApp:
         if not self.providers:
             raise ValueError("no enabled providers")
         for provider in self.providers:
+            parse_quiet_hours(provider.config.get("quiet_hours"))  # a typo fails at start
             saved = self.store.data["providers"].get(provider.name)
             if saved and saved.get("initialized"):
                 provider.restore_state(deepcopy(saved))
@@ -111,6 +113,8 @@ class WatcherApp:
         self._clock = time.monotonic
         self._next_due = {provider.name: 0.0 for provider in self.providers}
         self._running = set()
+        # Providers resting in their quiet_hours (logged once on the way in and out).
+        self._quiet = set()
         self._provider_threads: Dict[str, threading.Thread] = {}
         self._pending_interval_provider: Optional[str] = None
         # Auto-buyer waiting for a typed poll interval (separate from providers:
@@ -179,6 +183,18 @@ class WatcherApp:
     def run_scheduled_step(self, now: Optional[float] = None) -> None:
         current = self._clock() if now is None else now
         for provider in self.providers:
+            # No request in the quiet hours; the next round is due when they end.
+            spec = provider.config.get("quiet_hours")
+            quiet = in_quiet_hours(spec)
+            if quiet != (provider.name in self._quiet):
+                if quiet:
+                    self._quiet.add(provider.name)
+                    LOG.info("provider=%s quiet hours %s (Taiwan): paused", provider.name, spec)
+                else:
+                    self._quiet.discard(provider.name)
+                    LOG.info("provider=%s quiet hours over: resumed", provider.name)
+            if quiet:
+                continue
             with self._lock:
                 if (
                     current < self._next_due[provider.name]

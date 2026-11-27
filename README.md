@@ -770,6 +770,7 @@ TELEGRAM_CHAT_ID=123456789
 ## 抢购程序：重新开抢与踩过的坑
 
 **所有抢购程序通用的规矩和经验见 [docs/autobuy-lessons.md](docs/autobuy-lessons.md)**（只买已公开的链接、公开后等 3–5 秒、测试只用公开正价商品等），写新程序或重新开抢前先读。
+过 Cloudflare 和保持登录有两种做法：FAC 全程用浏览器（Turnstile 挂在登录、结账上），BOIL 用浏览器拿 `cf_clearance`、下单走纯 HTTP（验证挂在整页上）。怎么选、各自的前提见那份文档 §4a；夜间暂停（`quiet_hours`，台湾时间 00:05–09:05）见 §4b。
 
 两个抢购程序都只为一次活动写的，抢完后服务和账号凭据都已清理，代码保留下来供下次复用。
 
@@ -1062,6 +1063,13 @@ sudo cp deploy/20-memory-guard.conf /etc/systemd/system/vps-stock-watch.service.
 sudo systemctl daemon-reload
 sudo systemctl enable --now vps-stock-watch.service
 ```
+
+### 搬到另一台机器（2026-11-28：从 1 GB 的 AWS 香港搬到 8 核 / 8 GB 的洛杉矶机器）
+
+1. 新机器：同样的路径；用旧机器 `pip freeze` 的版本建 `.venv`；`playwright install --with-deps chromium` 装**同一个 Chromium build**（BOIL 的 `cf_clearance` 认 UA，版本一样旧通行证才能接着用）；装 `xvfb`。
+2. 拷 `/etc/systemd/system` 里正在用的 unit（含 drop-in），以及 `boil-egress` / `dmit-egress` 的 key 和 known_hosts。先只启动两条隧道，核对出口 IP 和旧机器一致。
+3. 挑整点以外、抢购没在等货的时候：旧机器 stop + disable 全部服务（`fac-tg-watch` 一定要先停），打包 `data/` 和 `.env` 留作备份，拷到新机器，再 enable --now。**两台绝不能同时跑**：Telegram 用户 session 会被作废，请求量也会翻倍。
+4. 检查：每个 provider 第一轮成功，`fac-tg-watch` 登录成功，FAC 没报登录失效，BOIL 日志出现 `cart page ok`，nodeseek 正常抓取。
 
 ## 当前限制
 

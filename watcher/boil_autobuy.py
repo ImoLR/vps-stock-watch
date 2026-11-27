@@ -82,6 +82,7 @@ from .config import load_config, telegram_credentials
 from .fac_trigger import alert_every, open_alert, take_triggers
 from .providers.base import is_challenge_page
 from .providers.boilcloud import BoilcloudProvider
+from .quiet_hours import in_quiet_hours, parse_quiet_hours
 from .telegram import TelegramClient, TelegramError
 
 
@@ -162,6 +163,10 @@ DEFAULTS: Dict[str, Any] = {
     "rush_spacing_seconds": 1.0,
     # The tunnel is down: straight from this host for this long.
     "direct_fallback_minutes": 10,
+    # Taiwan time, e.g. "00:05-09:05": no BOIL request at all meanwhile
+    # (TG still notifies; its links are dropped). When they end, the
+    # clearance is renewed and the login checked (see watcher.quiet_hours).
+    "quiet_hours": "",
     # cart.php sits behind a Cloudflare managed challenge (2026-11-27): a
     # plain Chromium passes it by itself (~15-25 s) and its cf_clearance,
     # with the same user agent and IP, lets these HTTP sessions in. The cart
@@ -776,6 +781,8 @@ class BoilAutoBuyer:
         self.clearance_path = Path(str(cfg["clearance_file"]))
         self.clearance_tried = float("-inf")
         self.last_cart_check = float("-inf")
+        parse_quiet_hours(cfg["quiet_hours"])  # a typo fails at start
+        self.quiet = False
         self._load_clearance()
         # Set by add_to_cart: the last product page said 缺貨中.
         self.sold_out = False
@@ -920,7 +927,7 @@ class BoilAutoBuyer:
             minutes = float(self.cfg["direct_fallback_minutes"])
             self.direct_until = time.monotonic() + minutes * 60
             LOG.warning("tunnel down (%s): direct for %g min", type(exc).__name__, minutes)
-            self.notify("⚠️ <b>BOIL 隧道不通</b>（%s）\n接下来 %g 分钟改从本机（AWS）直连 BOIL。"
+            self.notify("⚠️ <b>BOIL 隧道不通</b>（%s）\n接下来 %g 分钟改从本机直连 BOIL。"
                         % (html.escape(type(exc).__name__), minutes))
             return session.request(method, url, proxies=direct, **kwargs)
 
@@ -1819,6 +1826,38 @@ class BoilAutoBuyer:
                 for url, entry in self.armed.items()))
         return "待命（还要买：%s）：等 BOIL TG 频道/官方账号发链接，或 festive-offer 上架" % left
 
+    def quiet_step(self) -> bool:
+        """True in the quiet hours: no BOIL request at all (no polls, renewals,
+        login or order checks); TG triggers are dropped, as the relay already
+        told the user. On the way out the clearance is renewed and the login
+        checked, so the day starts ready (user, 2026-11-28)."""
+        spec = str(self.cfg["quiet_hours"])
+        if in_quiet_hours(spec):
+            if not self.quiet:
+                self.quiet = True
+                self.armed.clear()
+                LOG.info("quiet hours %s (Taiwan): no BOIL requests until they end", spec)
+            for trigger in take_triggers(self.trigger_dir):
+                source = str(trigger.get("source"))
+                if source.startswith("tg-"):
+                    self.learn_codes(promo_codes(str(trigger.get("text") or "")), source)
+                LOG.info("quiet hours: trigger from %s dropped: %s", source, trigger.get("urls"))
+            self.beat(state="watching", detail="夜间暂停（台湾时间 %s）：不访问 BOIL，TG 照常通知" % spec)
+            return True
+        if self.quiet:
+            self.quiet = False
+            LOG.info("quiet hours over: renewing the clearance and checking the login")
+            if time.monotonic() >= self.blocked_until:
+                try:
+                    self.refresh_clearance()
+                    self.check_login()
+                except BlockedError as exc:
+                    self.blocked(exc)
+                except Exception:
+                    LOG.exception("login check after the quiet hours failed")
+            self.last_cart_check = time.monotonic()  # the renewal just opened the cart
+        return False
+
     def run(self) -> int:
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
@@ -1827,6 +1866,9 @@ class BoilAutoBuyer:
         login_every = float(self.cfg["login_check_hours"]) * 3600
         try:
             while not self.stopping:
+                if self.quiet_step():
+                    time.sleep(1)
+                    continue
                 self.run_followups()
                 if self.switch.hold():
                     take_triggers(self.trigger_dir)  # a paused buyer ignores sightings

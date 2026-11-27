@@ -55,6 +55,7 @@ from .autobuy_status import Control, Heartbeat, Switch
 from .config import load_config, telegram_credentials
 from .fac_trigger import DEFAULT_DIR as TRIGGER_DIR
 from .fac_trigger import take_triggers
+from .quiet_hours import in_quiet_hours, parse_quiet_hours
 from .telegram import TelegramClient, TelegramError
 
 
@@ -100,6 +101,9 @@ DEFAULTS: Dict[str, Any] = {
     # checkout_wait_seconds, then looks for the invoice itself.
     "checkout_alert_seconds": 20,
     "checkout_wait_seconds": 90,
+    # Taiwan time, e.g. "00:05-09:05": no login check meanwhile, one as they
+    # end (see watcher.quiet_hours). TG triggers still arm the buyer at night.
+    "quiet_hours": "",
 }
 INVOICE_PATH = re.compile(r"/invoices/([^/?#]+)")
 # A pay option that takes the account balance. Not "credit card": that is a
@@ -402,6 +406,8 @@ class FacAutoBuyer:
         self.unconfirmed_checkout = False
         self.last_page_at = float("-inf")
         self.last_login_check = float("-inf")
+        parse_quiet_hours(cfg["quiet_hours"])  # a typo fails at start
+        self.quiet = False
         self.stopping = False
         self.heartbeat = Heartbeat(
             STATUS_DIR,
@@ -937,6 +943,19 @@ class FacAutoBuyer:
                 for url, entry in self.armed.items()))
         return "待命：等 FAC TG 公告/群消息或活动分类页开放"
 
+    def login_due(self, every: float) -> bool:
+        """Every ``every`` seconds, but not in the quiet hours; once as they end
+        (user, 2026-11-28: the 04:13 check moves to 09:05)."""
+        quiet = in_quiet_hours(self.cfg["quiet_hours"])
+        if quiet != self.quiet:
+            self.quiet = quiet
+            if quiet:
+                LOG.info("quiet hours %s (Taiwan): no login checks until they end", self.cfg["quiet_hours"])
+            else:
+                LOG.info("quiet hours over: checking the login")
+                self.last_login_check = float("-inf")
+        return not quiet and time.monotonic() - self.last_login_check >= every
+
     def run(self) -> int:
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
@@ -959,7 +978,7 @@ class FacAutoBuyer:
                     if self.poll_armed():
                         self.chrome.stop()
                         continue
-                elif time.monotonic() - self.last_login_check >= login_every:
+                elif self.login_due(login_every):
                     self.last_login_check = time.monotonic()
                     try:
                         self.chrome.start()
