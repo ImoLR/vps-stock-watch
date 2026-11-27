@@ -157,10 +157,9 @@ fac_autobuy:
   fast_poll_seconds: 20
   fast_minutes: 30
   slow_poll_seconds: 60
+  # 2026-11-28 (user): keep the 6-hourly login check round the clock, night
+  # included (no quiet_hours here; only the fachost_sale page check rests).
   login_check_hours: 6
-  # 2026-11-28 (user): no login check 00:05-09:05 Taiwan time, one at 09:05.
-  # TG links still arm the buyer at night.
-  quiet_hours: "00:05-09:05"
 
 # BOILCLOUD auto-buyer (watcher.boil_autobuy, deploy/boil-autobuy.service;
 # user, 2026-11-11). Plain HTTP (WHMCS, no captcha), no browser. Woken by the
