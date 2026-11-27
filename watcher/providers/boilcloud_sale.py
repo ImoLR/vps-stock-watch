@@ -110,14 +110,14 @@ class BoilcloudSaleProvider(BoilcloudProvider):
             if item.metadata.get("catalog_event") == "sale_category" and item.available:
                 # Wake the BOIL buyer; it orders only once the group is public
                 # (listed in the shop menu) or posted on Telegram.
-                # The card texts let the buyer skip a group with no SeedNet.
-                text = "\n".join(
+                # Each card's text lets the buyer skip a group with no target card.
+                texts = [
                     "%s %s" % (card.name, card.metadata.get("description") or "")
                     for card in cards.values()
-                )
+                ]
                 post_trigger(
-                    self.config.get("autobuy_trigger_dir"), "boilcloud_sale", [item.url], text,
-                    public=bool(item.metadata.get("listed_in_menu")),
+                    self.config.get("autobuy_trigger_dir"), "boilcloud_sale", [item.url], "\n".join(texts),
+                    public=bool(item.metadata.get("listed_in_menu")), cards=[text[:1000] for text in texts],
                 )
 
         found: List[str] = []
@@ -170,9 +170,10 @@ class BoilcloudSaleProvider(BoilcloudProvider):
                 item.metadata["discovery"] = {"type": "public_group", "hidden": False, "source": "store/%s" % slug}
                 found.setdefault(item.product_id, item)
                 if item.available:
+                    text = "%s %s" % (item.name, item.metadata.get("description") or "")
                     post_trigger(
                         self.config.get("autobuy_trigger_dir"), "boilcloud_sale", [url],
-                        "%s %s" % (item.name, item.metadata.get("description") or ""), public=True,
+                        text, public=True, cards=[text[:1000]],
                     )
         # Commit only after every group was read.
         self._group_cards = found
@@ -285,7 +286,15 @@ class BoilcloudSaleProvider(BoilcloudProvider):
         self._last_request = self._clock()
         self._scan_request_count += 1
         try:
-            response = self.session.get(url, params=params, timeout=self.timeout, allow_redirects=True)
+            try:
+                response = self.session.get(url, params=params, timeout=self.timeout, allow_redirects=True)
+            except requests.ConnectionError as exc:
+                if not self.proxy:
+                    raise
+                # The tunnel is down: straight from this host (a block page never switches).
+                LOG.warning("boilcloud_sale: proxy failed (%s); direct", type(exc).__name__)
+                response = self.session.get(url, params=params, timeout=self.timeout, allow_redirects=True,
+                                            proxies={"http": None, "https": None})
         except requests.RequestException as exc:
             raise FetchError("request failed for %s (%s)" % (url, type(exc).__name__)) from None
         text = response.text

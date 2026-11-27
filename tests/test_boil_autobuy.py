@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import tempfile
 import time
 import unittest
@@ -64,6 +65,15 @@ def checkout_page(total="$291.00 USD", balance="$300.00 USD", custtype="existing
 
 def invoice_page(status="Paid"):
     return '<html><body><div class="invoice-status"><span class="paid">%s</span></div></body></html>' % status
+
+
+def cart_view(items):
+    if not items:
+        return '<div class="view-cart-empty">您的購物車是空的</div>'
+    lines = "".join('<div class="item">x</div>' for _ in range(items))
+    return ('<div class="view-cart-items">%s</div>'
+            '<form method="post" action="/cart.php?a=empty"><input type="hidden" name="token" value="tok9">'
+            '<button type="submit">清空購物車</button></form>' % lines)
 
 
 def resp(text="", url=BASE, status=200, headers=None):
@@ -180,9 +190,23 @@ class HelperTest(unittest.TestCase):
         )
         # SeedNet sale post with only the home page: the sale group.
         self.assertEqual(targets("tg-channel", "聖誕 SeedNet 年付 今晚上架", [BASE]), [festive])
-        # Site monitor: only when a card mentions a target.
+        # Site monitor: only when one card is a full target not bought yet.
         self.assertEqual(targets("boilcloud_sale", "HKT 777Mbps 半年付", [festive], public=True), [])
-        self.assertEqual(targets("boilcloud_sale", "羊年 SeedNet 300M", [festive], public=False), [festive])
+        self.assertEqual(targets("boilcloud_sale", "羊年 SeedNet 300M", [festive], public=False), [])
+        seednet = "羊年 SeedNet 300M " + DYNAMIC
+        self.assertEqual(targets("boilcloud_sale", seednet, [festive], public=False), [festive])
+        self.assertEqual(
+            targets("boilcloud_sale", "x", [festive], public=True, cards=["HKT 777Mbps", seednet]), [festive])
+        # The 2026 Black Friday blind box names SeedNet / Japan prizes: nothing.
+        box = "2026年黑五盲盒 隨機開出 SeedNet 動態 IP、日本 SoftBank 等"
+        self.assertEqual(targets("boilcloud_sale", box, [festive], public=True, cards=[box]), [])
+        # Several cards whose words only add up to a target together: nothing.
+        self.assertEqual(targets("boilcloud_sale", "x", [festive], public=True,
+                                 cards=["羊年 SeedNet 靜態 IP", "HKT " + DYNAMIC]), [])
+        # SeedNet already bought: only a Japan/USA card arms it.
+        self.assertEqual(ba.trigger_targets(
+            {"source": "boilcloud_sale", "text": seednet, "urls": [festive], "cards": [seednet]},
+            CFG, done=["seednet"]), [])
         # Site monitor on a public group (one card): only a full target.
         japan = BASE + "store/japan-shared-bandwidth"
         self.assertEqual(targets("boilcloud_sale", "靜態 SoftBank 1000Mbps 日本", [japan], public=True), [])
@@ -268,8 +292,12 @@ class FakeSite:
     """Answers the buyer's requests by URL; records every call."""
 
     def __init__(self, checkout=None, invoice_status="Paid", add_url=None, cycles=None,
-                 name="2027 羊年 SeedNet 300Mbps VPS", desc="遠傳 SeedNet 寬頻 動態 IP", promo=None):
+                 name="2027 羊年 SeedNet 300Mbps VPS", desc="遠傳 SeedNet 寬頻 動態 IP", promo=None,
+                 festive_cards=None):
         self.calls = []
+        self.festive_cards = festive_cards
+        self.sold_out = False  # product links answer 缺貨中
+        self.in_cart = 0
         self.cycles = cycles
         self.name, self.desc = name, desc
         # promo: (code, checkout page once the code is applied)
@@ -285,8 +313,16 @@ class FakeSite:
     def request(self, method, url, **kwargs):
         self.calls.append((method, url))
         if "a=empty" in url:
+            assert method == "POST", "BOIL answers a GET of cart.php?a=empty with 403"
+            self.in_cart = 0
             return resp(url=BASE + "cart.php?a=view")
-        if "a=empty" not in url and ("a=add&pid=" in url or "store/taiwan-home-broadband/" in url):
+        if "a=view" in url and method == "GET":
+            return resp(cart_view(self.in_cart), BASE + "cart.php?a=view")
+        if "a=empty" not in url and ("a=add&pid=" in url or "store/taiwan-home-broadband/" in url
+                                     or re.search(r"/store/[^/]+/product-\d+$", url)):
+            if self.sold_out:
+                return resp("糟糕，發生問題了... 缺貨中 很抱歉，本產品 / 服務目前處於缺貨中", url)
+            self.in_cart += 1
             self.promo_applied = False
             return resp(conf_page(name=self.name, cycles=self.cycles, desc=self.desc), self.add_url)
         if "a=confproduct" in url:
@@ -307,7 +343,7 @@ class FakeSite:
             return resp('<a href="logout.php">登出</a>', BASE + "clientarea.php")
         if "store/festive-offer" in url:
             return resp(
-                category_html([("festive-offer", "節日特別提供")], [
+                category_html([("festive-offer", "節日特別提供")], self.festive_cards if self.festive_cards is not None else [
                     {"pid": 540, "name": "2027 羊年 SeedNet 300Mbps VPS", "stock": 2, "bandwidth": DYNAMIC},
                     {"pid": 541, "name": "HKT 777Mbps", "stock": 5, "bandwidth": DYNAMIC},
                 ], current="festive-offer"),
@@ -326,9 +362,10 @@ class FakeSite:
             return resp(category_html([("hong-kong-shared-bandwidth", "香港")], [], empty=True))
         raise AssertionError("unexpected request %s %s" % (method, url))
 
-    def post_checkout(self, url, data=None, timeout=None):
+    def post_checkout(self, url, data=None, timeout=None, headers=None):
         self.calls.append(("POST", url))
         self.posted_checkout = data
+        self.checkout_headers = headers
         self.invoices.append(71)
         return resp("<p>訂單已完成</p>", BASE + "cart.php?a=complete")
 
@@ -361,9 +398,26 @@ class BuyerTest(unittest.TestCase):
             buyer = self.buyer(tmp, site)
             buyer.arm([BASE + "store/festive-offer"], "tg-channel", True)
             self.assertFalse(buyer.poll_armed())  # Japan/USA still to buy: keeps watching
-            added = [url for _, url in site.calls if "a=add&pid=" in url]
-            self.assertEqual(added, [BASE + "cart.php?a=add&pid=540"])  # HKT card never touched
+            festive = BASE + "store/festive-offer"
+            added = [url for _, url in site.calls if "/product-" in url or "a=add&pid=" in url]
+            # The card's own link, never cart.php?a=add&pid= ("直链下单").
+            self.assertEqual(added, [festive + "/product-540"])  # HKT card never touched
+            # Read logged out; then opened logged in and clicked, with the group as referer.
+            self.assertEqual([c.args[1] for c in buyer.public_session.request.call_args_list], [festive])
+            logged_in = buyer.session.request.call_args_list
+            urls = [c.args[1] for c in logged_in]
+            self.assertLess(urls.index(festive), urls.index(festive + "/product-540"))
+            click = logged_in[urls.index(festive + "/product-540")]
+            self.assertEqual(click.kwargs["headers"]["Referer"], festive)
             self.assertEqual(site.posted_checkout["accepttos"], "on")
+            # Like the page: configure -> cart -> checkout, each with the page before as referer.
+            steps = [(c.args[0], c.args[1], (c.kwargs.get("headers") or {}).get("Referer"))
+                     for c in buyer.session.request.call_args_list]
+            conf = next(i for i, (m, u, _) in enumerate(steps) if m == "POST" and u.endswith("a=confproduct"))
+            self.assertEqual([u.rsplit("/", 1)[1] for _, u, _ in steps[conf:conf + 3]],
+                             ["cart.php?a=confproduct", "cart.php?a=view", "cart.php?a=checkout"])
+            self.assertEqual(steps[conf + 2][2], BASE + "cart.php?a=view")
+            self.assertEqual(site.checkout_headers["Referer"], BASE + "cart.php?a=checkout")
             self.assertEqual(site.posted_checkout["applycredit"], "1")
             self.assertEqual(site.configured, ["annually"])
             marker = json.loads((Path(tmp) / "done_seednet.json").read_text("utf-8"))
@@ -377,7 +431,7 @@ class BuyerTest(unittest.TestCase):
             buyer.armed[BASE + "store/festive-offer"]["next"] = 0
             site.calls.clear()
             buyer.poll_armed()
-            self.assertEqual([url for _, url in site.calls if "a=add" in url], [])
+            self.assertEqual([url for _, url in site.calls if "a=add" in url or "/product-" in url], [])
 
     def test_both_targets_bought_pauses_the_buyer(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -389,8 +443,8 @@ class BuyerTest(unittest.TestCase):
             self.assertEqual(set(buyer.done), {"seednet"})
             buyer.arm([BASE + "store/japan-shared-bandwidth"], "tg-channel", True)
             self.assertTrue(buyer.poll_armed())
-            added = [url for _, url in site.calls if "a=add&pid=" in url]
-            self.assertEqual(added, [BASE + "cart.php?a=add&pid=311"])  # not the static one
+            added = [url for _, url in site.calls if "/product-" in url]
+            self.assertEqual(added, [BASE + "store/japan-shared-bandwidth/product-311"])  # not the static one
             self.assertTrue((Path(tmp) / "done_jpus.json").exists())
             self.assertTrue((Path(tmp) / "done.json").exists())
             self.assertTrue(buyer.switch.control.paused())
@@ -436,11 +490,11 @@ class BuyerTest(unittest.TestCase):
                 return site_request(method, url, **kwargs)
 
             buyer = self.buyer(tmp, site)
-            buyer.session.request = mock.Mock(side_effect=request)
+            buyer.session.request = buyer.public_session.request = mock.Mock(side_effect=request)
             buyer.arm([BASE + "store/festive-offer"], "tg-channel", True)
             buyer.poll_armed()
-            added = [url for _, url in site.calls if "a=add&pid=" in url]
-            self.assertEqual(added[0], BASE + "cart.php?a=add&pid=540")
+            added = [url for _, url in site.calls if "/product-" in url]
+            self.assertEqual(added[0], BASE + "store/festive-offer/product-540")
 
     def test_japan_annual_only_over_40_a_month_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -492,6 +546,145 @@ class BuyerTest(unittest.TestCase):
             self.assertNotIn(japan, buyer.armed)
             self.assertEqual(buyer.sent, [])
 
+    def test_sale_group_from_the_monitor_disarms_without_a_target_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(festive_cards=[{"pid": 553, "name": "2026年黑五盲盒", "stock": 0,
+                                            "bandwidth": "隨機開出 SeedNet 動態 IP"}])
+            buyer = self.buyer(tmp, site)
+            festive = BASE + "store/festive-offer"
+            buyer.arm([festive], "boilcloud_sale", True)
+            self.assertFalse(buyer.poll_armed())
+            self.assertNotIn(festive, buyer.armed)  # the monitor's 5-min read re-arms it
+            # Posted on Telegram too: keeps watching (a card may still come).
+            buyer.arm([festive], "boilcloud_sale", True)
+            buyer.arm([festive], "tg-channel", True)
+            self.assertFalse(buyer.poll_armed())
+            self.assertIn(festive, buyer.armed)
+            entry = buyer.armed[festive]
+            self.assertGreater(entry["next"] - time.monotonic(), CFG["fast_poll_seconds"] - 5)
+
+    def test_block_page_stops_every_request_for_an_hour(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            buyer = self.buyer(tmp, site)
+            buyer.last_login_check = float("-inf")  # the warm-up login hits the block
+            buyer.session.request = mock.Mock(return_value=resp("Attention Required! | Cloudflare", status=403))
+            festive = BASE + "store/festive-offer"
+            buyer.arm([festive], "tg-channel", True)
+            self.assertFalse(buyer.poll_armed())  # no crash
+            self.assertIn("限流", buyer.sent[0])
+            self.assertGreater(buyer.blocked_until - time.monotonic(), 3500)
+            calls = buyer.session.request.call_count
+            # New links while blocked wait too.
+            buyer.arm([BASE + "cart.php?a=add&pid=540"], "tg-channel", True)
+            self.assertFalse(buyer.poll_armed())
+            self.assertEqual(buyer.session.request.call_count, calls)
+            self.assertTrue(all(e["next"] >= buyer.blocked_until for e in buyer.armed.values()))
+
+    def test_proxy_is_used_for_every_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = argparse.Namespace(no_notify=True, dry_run_url=None, check_login=False, tos_probe_url=None)
+            config = {"boil_autobuy": {"proxy": "socks5://127.0.0.1:1082",
+                                       "marker_file": str(Path(tmp) / "done.json"),
+                                       "cookie_file": str(Path(tmp) / "cookies.json"),
+                                       "promo_file": str(Path(tmp) / "promo.json")}}
+            with patch.object(ba, "STATUS_DIR", str(Path(tmp) / "status")), \
+                    patch.object(ba, "telegram_credentials", return_value={"token": None, "chat_id": None}):
+                buyer = ba.BoilAutoBuyer(config, args)
+            for session in (buyer.session, buyer.public_session):
+                self.assertEqual(session.proxies["https"], "socks5h://127.0.0.1:1082")
+
+    def test_sold_out_tg_link_is_opened_every_second_until_stock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            site.sold_out = True
+            buyer = self.buyer(tmp, site)
+            link = BASE + "store/festive-offer/product-540"
+            buyer.arm([link], "tg-channel", True, text="🎄 羊年 SeedNet 300M 年付 開賣")
+            self.assertFalse(buyer.poll_armed())
+            entry = buyer.armed[link]
+            self.assertTrue(buyer.rushing(entry))
+            self.assertAlmostEqual(entry["next"] - time.monotonic(), 1.0, delta=0.5)
+            # The cart is looked at first (nothing in it: no empty-cart post).
+            self.assertEqual(site.calls, [("GET", BASE + "cart.php?a=view"), ("GET", link)])
+            # Retries: only the link itself (nothing went into the cart, so no "empty cart" page).
+            site.calls.clear()
+            entry["next"] = 0
+            buyer.poll_armed()
+            self.assertEqual(site.calls, [("GET", link)])
+            # Stock is out: bought on the next try.
+            site.sold_out = False
+            entry["next"] = 0
+            buyer.poll_armed()
+            self.assertIsNotNone(site.posted_checkout)
+            self.assertIn("抢到了", "".join(buyer.sent))
+
+    def test_sold_out_tg_link_gives_up_after_the_rush(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            site.sold_out = True
+            buyer = self.buyer(tmp, site)
+            link = BASE + "store/festive-offer/product-540"
+            buyer.arm([link], "tg-channel", True, text="SeedNet 年付")
+            buyer.poll_armed()
+            buyer.armed[link]["rush_until"] = time.monotonic() - 1
+            buyer.armed[link]["next"] = 0
+            buyer.poll_armed()
+            self.assertNotIn(link, buyer.armed)
+            self.assertIn("一直缺货", buyer.sent[-1])
+
+    def test_sold_out_blind_box_link_is_not_rushed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(festive_cards=[{"pid": 553, "name": "2026年黑五盲盒", "stock": 0,
+                                            "bandwidth": "日本 SoftBank 動態 IP"}])
+            site.sold_out = True
+            buyer = self.buyer(tmp, site)
+            link = BASE + "store/festive-offer/product-553"
+            # The post names 日本 and HiNet, but also 盲盒 and NAT: its card decides.
+            buyer.arm([link], "tg-channel", True, text="神秘盲盒 第二弹 🇯🇵 日本 Docomo 🇨🇦 Telus（NAT）")
+            buyer.poll_armed()
+            self.assertNotIn(link, buyer.armed)
+            self.assertEqual([c.args[1] for c in buyer.public_session.request.call_args_list],
+                             [BASE + "store/festive-offer"])
+            self.assertEqual(buyer.sent, [])
+
+    def test_sold_out_link_from_the_monitor_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            site.sold_out = True
+            buyer = self.buyer(tmp, site)
+            link = BASE + "store/festive-offer/product-540"
+            buyer.arm([link], "boilcloud_sale", True)
+            buyer.poll_armed()
+            self.assertNotIn(link, buyer.armed)
+
+    def test_tunnel_down_goes_direct_but_never_resends_a_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            buyer = self.buyer(tmp, site)
+            buyer.session.proxies = {"https": "socks5h://127.0.0.1:1082"}
+            refused = ba.requests.ConnectionError(SimpleNamespace(reason=ba.NewConnectionError(None, "refused")))
+
+            def flaky(method, url, **kwargs):
+                if "proxies" not in kwargs:
+                    raise refused
+                return site.request(method, url, **kwargs)
+
+            buyer.session.request = mock.Mock(side_effect=flaky)
+            page = buyer.request("GET", "clientarea.php")
+            self.assertIn("logout", page.text)
+            self.assertIn("隧道不通", buyer.sent[0])
+            self.assertEqual(buyer.session.request.call_args.kwargs["proxies"], {"http": None, "https": None})
+            # Direct for a while, without trying the tunnel first.
+            buyer.request("GET", "clientarea.php")
+            self.assertEqual(buyer.session.request.call_count, 3)
+            # A checkout cut off mid-way is not sent again.
+            buyer.direct_until = float("-inf")
+            buyer.session.request = mock.Mock(side_effect=ba.requests.ConnectionError("reset by peer"))
+            with self.assertRaises(ba.requests.ConnectionError):
+                buyer.request("POST", "cart.php?a=checkout", data={})
+            self.assertEqual(buyer.session.request.call_count, 1)
+
     def test_hidden_group_is_never_opened_logged_in(self):
         with tempfile.TemporaryDirectory() as tmp:
             site = FakeSite()
@@ -521,7 +714,7 @@ class BuyerTest(unittest.TestCase):
             self.assertIn("540", buyer.price_dropped)
             buyer.order("540")
             self.assertEqual(len(buyer.sent), 1)
-            self.assertEqual(site.calls[-1][1], BASE + "cart.php?a=empty")
+            self.assertEqual(site.calls[-1], ("POST", BASE + "cart.php?a=empty"))
 
     def test_plan_with_several_cycles_buys_the_cheapest_per_month(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -610,7 +803,7 @@ class BuyerTest(unittest.TestCase):
                 return site_request(method, url, **kwargs)
 
             buyer = self.buyer(tmp, site)
-            buyer.session.request = mock.Mock(side_effect=request)
+            buyer.session.request = buyer.public_session.request = mock.Mock(side_effect=request)
             self.assertEqual(buyer.order("540"), ba.OrderResult.WAIT)
 
     def festive(self, site, cards):
@@ -632,7 +825,7 @@ class BuyerTest(unittest.TestCase):
             cards = [{"pid": 540, "name": "2027 羊年 SeedNet 300Mbps VPS", "stock": 0, "bandwidth": DYNAMIC,
                       "cycle": ("annually", "年繳")}]
             buyer = self.buyer(tmp, site)
-            buyer.session.request = mock.Mock(side_effect=self.festive(site, cards))
+            buyer.session.request = buyer.public_session.request = mock.Mock(side_effect=self.festive(site, cards))
             url = BASE + "store/festive-offer"
             buyer.arm([url], "boilcloud_sale", True)
             with patch.object(buyer, "burst_now", return_value=(False, 40.0)):
@@ -668,7 +861,7 @@ class BuyerTest(unittest.TestCase):
             cards = [{"pid": 553, "name": "2026年黑五盲盒", "stock": 0, "region": "香港：",
                       "bandwidth": "日本： SoftBank 1G獨享 月付 美國： ATT 500M 季付"}]
             buyer = self.buyer(tmp, site)
-            buyer.session.request = mock.Mock(side_effect=self.festive(site, cards))
+            buyer.session.request = buyer.public_session.request = mock.Mock(side_effect=self.festive(site, cards))
             url = BASE + "store/festive-offer"
             buyer.arm([url], "boilcloud_sale", True)
             buyer.poll_armed()
@@ -696,7 +889,8 @@ class MonitorHookTest(unittest.TestCase):
             item._rounds = 1
             page = category_html(
                 [("hong-kong-shared-bandwidth", "香港")],
-                [{"pid": 540, "name": "2027 羊年 SeedNet 300Mbps VPS", "stock": 2}],
+                [{"pid": 540, "name": "2027 羊年 SeedNet 300Mbps VPS", "stock": 2, "bandwidth": DYNAMIC},
+                 {"pid": 541, "name": "2026年黑五盲盒", "stock": 5}],
                 current="festive-offer",
             )
             with patch.object(item.session, "get", return_value=resp(page, BASE + "store/festive-offer")):
@@ -706,9 +900,11 @@ class MonitorHookTest(unittest.TestCase):
             self.assertEqual(triggers[0]["source"], "boilcloud_sale")
             self.assertIs(triggers[0]["public"], False)
             self.assertIn("SeedNet", triggers[0]["text"])
+            self.assertEqual(len(triggers[0]["cards"]), 2)
             self.assertEqual(
                 ba.trigger_targets(triggers[0], CFG), [BASE + "store/festive-offer"]
             )
+            self.assertEqual(ba.trigger_targets(triggers[0], CFG, done=["seednet"]), [])
 
     def test_public_taiwan_group_keeps_only_seednet_and_wakes_buyer_as_public(self):
         with tempfile.TemporaryDirectory() as tmp:

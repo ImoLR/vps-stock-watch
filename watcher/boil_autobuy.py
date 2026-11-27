@@ -19,8 +19,10 @@ Black Friday, Christmas and the new year, named after the zodiac year (2026
 Like the FAC buyer it does not watch the site by itself. The Telegram relay
 (a cloud.boil.network link posted on BOIL's channel or by BOIL's own
 accounts in the group) and the ``boilcloud_sale`` provider (festive-offer
-lists products) drop trigger files (``fac_trigger``); each trigger arms its
-links for a few hours, and armed links are checked one page at a time.
+lists a target card) drop trigger files (``fac_trigger``); each trigger arms
+its links for a few hours, and armed links are checked one page at a time
+(every 20 s for 10 minutes, then every 5 minutes). A block page stops every
+request to BOIL for an hour. All of it can go through ``proxy``.
 
 Hidden links are never ordered (user, 2026-11-08 / 2026-11-11). A link is
 public once it was posted on Telegram, or once its group shows up in the
@@ -33,8 +35,16 @@ while a public sale group shows a target card that has no stock yet, the
 buyer reads that group every few seconds around each full hour (see
 ``burst_*``), logged in and with the newest invoice id already read.
 
+Two lines (user, 2026-11-27, after BOIL said it blocks "script refreshes
+and direct-link orders"): every refresh of a group runs logged out; the
+logged-in session only buys. It opens the group page, then the card's own
+立即購買 link with the group as Referer (never cart.php?a=add&pid=N), or the
+link BOIL posted on Telegram. A posted link that still says 缺貨中 (the post
+can beat the stock by a couple of seconds) is opened again every second for
+a minute if it may be a target.
+
 The shop is plain WHMCS with no captcha, so this is plain HTTP (requests),
-no browser. Order: cart.php?a=add&pid=N (a store product link redirects
+no browser. Order: the card / posted link (a store product link redirects
 straight to the configure page, with no pid in it) -> confproduct (the
 cheapest cycle per month, default options, no paid upgrades) -> promo code
 on the cart page, if BOIL posted one -> checkout page (today's total and
@@ -64,6 +74,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from urllib3.exceptions import NewConnectionError
 
 from .autobuy_status import Control, Heartbeat, Switch
 from .config import load_config, telegram_credentials
@@ -127,13 +138,26 @@ DEFAULTS: Dict[str, Any] = {
     "menu_url": "https://cloud.boil.network/store/hong-kong-shared-bandwidth",
     "arm_minutes": 360,
     "fast_poll_seconds": 20,
-    "fast_minutes": 30,
-    "slow_poll_seconds": 60,
+    "fast_minutes": 10,
+    # Same pace as the site monitor (2026-11-27, user: back to 5 minutes).
+    "slow_poll_seconds": 300,
+    # A 403/429/challenge page stops every request for this long.
+    "blocked_pause_minutes": 60,
+    # Optional egress for every BOIL request, e.g. "socks5://127.0.0.1:1082"
+    # (an SSH -D tunnel); DNS resolves at the proxy.
+    "proxy": "",
     # Polls and menu checks keep >=4 s between pages; the few requests of one
     # order (add, configure, checkout page, submit) run closer together: the
     # agreed snipe target only.
     "page_spacing_seconds": 4,
     "order_spacing_seconds": 1.0,
+    # A posted product link that still says 缺貨中 (BOIL's post can beat the
+    # stock by a couple of seconds): opened again every second for this long,
+    # if it may be a target (user, 2026-11-27).
+    "rush_seconds": 60,
+    "rush_spacing_seconds": 1.0,
+    # The tunnel is down: straight from this host for this long.
+    "direct_fallback_minutes": 10,
     # Hourly bursts (user, 2026-11-26). BOIL puts sale stock out on the hour:
     # the 2026 Black Friday box sat in the public festive-offer with 0 stock
     # from ~22:55, got its stock at 0:00 JST (23:00 TW) and was gone in a
@@ -183,6 +207,34 @@ class OrderResult:
 
 class BlockedError(RuntimeError):
     pass
+
+
+def cart_is_empty(page_html: str) -> bool:
+    """cart.php?a=view shows no product line."""
+    soup = BeautifulSoup(page_html, "lxml")
+    if soup.select_one(".view-cart-empty"):
+        return True
+    return not soup.select(".view-cart-items .item")
+
+
+def empty_cart_form(page_html: str, page_url: str) -> Optional[Tuple[str, Dict[str, str]]]:
+    """The cart page's 清空購物車 form: (action URL, fields)."""
+    soup = BeautifulSoup(page_html, "lxml")
+    for form in soup.select("form"):
+        action = str(form.get("action") or "")
+        if "a=empty" not in action and not form.select_one('input[name="a"][value="empty"]'):
+            continue
+        data = {str(node.get("name")): str(node.get("value") or "")
+                for node in form.select("input[name]") if str(node.get("type") or "").lower() != "checkbox"}
+        return urljoin(page_url, action or page_url), data
+    return None
+
+
+def not_sent(exc: Exception) -> bool:
+    """A connection error raised before the request left (tunnel down)."""
+    reason = getattr(exc.args[0], "reason", None) if exc.args else None
+    return isinstance(exc, (requests.exceptions.ProxyError, requests.exceptions.ConnectTimeout)) or isinstance(
+        reason, NewConnectionError)
 
 
 # --------------------------------------------------------------------------
@@ -350,16 +402,20 @@ def trigger_is_public(trigger: Dict[str, Any]) -> bool:
     return str(trigger.get("source") or "").startswith("tg-") or trigger.get("public") is True
 
 
-def trigger_targets(trigger: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
+def trigger_targets(trigger: Dict[str, Any], cfg: Dict[str, Any], done: Iterable[str] = ()) -> List[str]:
     """The links worth arming for one trigger (as canonical URLs).
 
     Product links are always tried (one check shows the name). A group link
     is armed when the post talks about a target, or it is a sale group posted
-    on Telegram (the site monitor's trigger carries the cards' text); a
-    public group the site monitor reads arms only for a card that is a
-    target. A target sale post without a store link arms the default sale
-    group; a post that only carries a promo code arms nothing (the buyer
-    learns the code). Maintenance notices and regular HKT restocks arm nothing.
+    on Telegram. A group the site monitor reads arms only for a card that is
+    a target not bought yet (the trigger carries each card's text): the
+    monitor already reads the group every few minutes, so the buyer stays
+    off the site until there is something to buy (2026-11-27: a Black Friday
+    blind box, whose text names SeedNet prizes, kept it polling for 18 h
+    until BOIL blocked the IP). A target sale post without a store link arms
+    the default sale group; a post that only carries a promo code arms
+    nothing (the buyer learns the code). Maintenance notices and regular HKT
+    restocks arm nothing.
     """
     base = str(cfg["base_url"])
     text = str(trigger.get("text") or "")
@@ -367,6 +423,13 @@ def trigger_targets(trigger: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
     about_target = mentions(text, target_words(cfg))
     if trigger.get("promo"):
         return []  # a code-only post: the buyer just learns the code
+    done = set(done)
+    cards = trigger.get("cards")
+    card_texts = [str(card) for card in cards] if isinstance(cards, list) else [text]
+    wanted = any(
+        target is not None and target["key"] not in done
+        for target in (match_target(card, cfg) for card in card_texts)
+    )
     targets: List[str] = []
     other = False
     for url in trigger.get("urls") or []:
@@ -377,8 +440,7 @@ def trigger_targets(trigger: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
         elif kind == "product":
             target = value
         elif kind == "group" and source == "boilcloud_sale":
-            # The site monitor sends the card texts (a public group: one card).
-            if (about_target if value in cfg["sale_groups"] else match_target(text, cfg)):
+            if wanted:
                 target = urljoin(base, "store/%s" % value)
         elif kind == "group" and (about_target or value in cfg["sale_groups"]):
             target = urljoin(base, "store/%s" % value)
@@ -638,6 +700,10 @@ class BoilAutoBuyer:
         self.cart_dirty = True
         self.last_page_at = float("-inf")
         self.last_login_check = float("-inf")
+        self.blocked_until = float("-inf")
+        self.direct_until = float("-inf")
+        # Set by add_to_cart: the last product page said 缺貨中.
+        self.sold_out = False
         self.stopping = False
         self.heartbeat = Heartbeat(
             STATUS_DIR,
@@ -655,6 +721,9 @@ class BoilAutoBuyer:
     def _new_session(self) -> requests.Session:
         session = requests.Session()
         session.headers.update({"User-Agent": UA, "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8"})
+        proxy = str(self.cfg.get("proxy") or "").strip().replace("socks5://", "socks5h://", 1)
+        if proxy:
+            session.proxies.update({"http": proxy, "https": proxy})
         return session
 
     def _load_cookies(self) -> None:
@@ -732,8 +801,9 @@ class BoilAutoBuyer:
             LOG.exception("Telegram notification failed")
 
     def request(self, method: str, url: str, spacing: Optional[float] = None,
-                public: bool = False, **kwargs: Any) -> requests.Response:
-        """One request, spaced from the last; a block page raises BlockedError."""
+                public: bool = False, referer: Optional[str] = None, **kwargs: Any) -> requests.Response:
+        """One request, spaced from the last; a block page raises BlockedError.
+        ``public``: the logged-out session (refreshes); else the logged-in one."""
         gap = float(self.cfg["page_spacing_seconds"] if spacing is None else spacing)
         wait = gap - (time.monotonic() - self.last_page_at)
         if wait > 0:
@@ -741,12 +811,39 @@ class BoilAutoBuyer:
         self.last_page_at = time.monotonic()
         session = self.public_session if public else self.session
         kwargs.setdefault("timeout", self.timeout)
-        response = session.request(method, urljoin(self.base_url, url), **kwargs)
+        headers = dict(kwargs.get("headers") or {})
+        if referer:
+            headers["Referer"] = referer
+        if method == "POST":
+            headers.setdefault("Origin", self.base_url.rstrip("/"))  # as a browser's form post
+        if headers:
+            kwargs["headers"] = headers
+        response = self._send(session, method, urljoin(self.base_url, url), **kwargs)
         if response.status_code in (403, 429) or is_challenge_page(response.text):
             raise BlockedError("HTTP %s for %s" % (response.status_code, url))
         if not public:
             self._save_cookies()
         return response
+
+    def _send(self, session: requests.Session, method: str, url: str, **kwargs: Any) -> requests.Response:
+        """Through ``proxy``; if the tunnel is down, straight from this host for
+        ``direct_fallback_minutes``. A block page never switches the route."""
+        direct = {"http": None, "https": None}
+        if not session.proxies:
+            return session.request(method, url, **kwargs)
+        if time.monotonic() < self.direct_until:
+            return session.request(method, url, proxies=direct, **kwargs)
+        try:
+            return session.request(method, url, **kwargs)
+        except requests.ConnectionError as exc:
+            if method != "GET" and not not_sent(exc):
+                raise  # it may have reached BOIL: the checkout's own checks decide
+            minutes = float(self.cfg["direct_fallback_minutes"])
+            self.direct_until = time.monotonic() + minutes * 60
+            LOG.warning("tunnel down (%s): direct for %g min", type(exc).__name__, minutes)
+            self.notify("⚠️ <b>BOIL 隧道不通</b>（%s）\n接下来 %g 分钟改从本机（AWS）直连 BOIL。"
+                        % (html.escape(type(exc).__name__), minutes))
+            return session.request(method, url, proxies=direct, **kwargs)
 
     # -- login -------------------------------------------------------------
     @staticmethod
@@ -781,7 +878,19 @@ class BoilAutoBuyer:
         return ok
 
     def empty_cart(self) -> None:
-        self.request("GET", "cart.php?a=empty", spacing=float(self.cfg["order_spacing_seconds"]))
+        """Empty the cart the way its page does: open cart.php?a=view and, if
+        anything is in it, post its 清空購物車 form. (A plain GET of
+        cart.php?a=empty got a 403 on 2026-11-27: BOIL blocks links a browser
+        never opens by itself.)"""
+        if not self.cart_dirty:
+            return  # emptied already, and nothing added since
+        spacing = float(self.cfg["order_spacing_seconds"])
+        view = self.request("GET", "cart.php?a=view", spacing=spacing)
+        if not cart_is_empty(view.text):
+            form = empty_cart_form(view.text, view.url)
+            if form is None:
+                raise RuntimeError("购物车页里找不到“清空購物車”的表单")
+            self.request("POST", form[0], spacing=spacing, referer=view.url, data=form[1])
         self.cart_dirty = False
 
     def newest_invoice(self) -> Optional[int]:
@@ -813,35 +922,39 @@ class BoilAutoBuyer:
         self.empty_cart()
         return OrderResult.DROP
 
-    def add_to_cart(self, pid: str) -> Optional[requests.Response]:
+    def add_to_cart(self, pid: str, referer: Optional[str] = None) -> Optional[requests.Response]:
         """Put ``pid`` in an empty cart; its configure page, or None (not orderable)."""
         if self.cart_dirty:
             self.empty_cart()
         self.cart_dirty = True
-        response = self.request("GET", cart_link(self.base_url, pid), spacing=self.spacing)
+        self.sold_out = False
+        response = self.request("GET", cart_link(self.base_url, pid), spacing=self.spacing, referer=referer)
         if "a=confproduct" in response.url:
             return response
         if OUT_OF_STOCK.search(BeautifulSoup(response.text, "lxml").get_text(" ", strip=True)):
             LOG.info("pid %s out of stock", pid)
+            self.sold_out = True
+            self.cart_dirty = False  # nothing went into the cart
         else:
             LOG.info("pid %s: no configure page (%s)", pid, response.url)
         return None
 
     def apply_promo(self, code: str, token: str) -> None:
-        reply = self.request("POST", "cart.php?a=view", spacing=self.spacing,
+        view = urljoin(self.base_url, "cart.php?a=view")
+        reply = self.request("POST", "cart.php?a=view", spacing=self.spacing, referer=view,
                              data={"token": token, "promocode": code, "validatepromo": "true"})
         # "您填寫的優惠代碼並不存在。" comes as a warning; hidden alerts are page furniture.
         for node in BeautifulSoup(reply.text, "lxml").select(".alert-warning, .alert-danger, .alert-success"):
             if "w-hidden" not in (node.get("class") or []):
                 LOG.info("promo code %s: %s", code, node.get_text(" ", strip=True)[:200])
 
-    def order(self, pid: str, mode: str = "live", quiet: bool = False) -> str:
+    def order(self, pid: str, mode: str = "live", quiet: bool = False, referer: Optional[str] = None) -> str:
         """Order ``pid`` (a PID or a store product link) if it is a target at
         its price. ``mode``: live, dry (stop before checkout) or tos (submit
         checkout without the TOS box: WHMCS refuses, no order). ``quiet``:
         misses are only logged, and pages keep the normal spacing."""
         self.spacing = float(self.cfg["page_spacing_seconds" if quiet else "order_spacing_seconds"])
-        response = self.add_to_cart(pid)
+        response = self.add_to_cart(pid, referer)
         if response is None:
             return OrderResult.WAIT
         _, info = conf_form(response.text, None, str(self.cfg["hostname"]), random_password())
@@ -872,21 +985,24 @@ class BoilAutoBuyer:
         misses: List[str] = []
         for index, (cycle, code) in enumerate(tries):
             if index:
-                response = self.add_to_cart(pid)
+                response = self.add_to_cart(pid, referer)
                 if response is None:
                     return OrderResult.WAIT
             data, _ = conf_form(response.text, cycle, str(self.cfg["hostname"]), random_password())
             if data is None:
                 continue
             data["i"] = data.get("i") or parse_qs(urlparse(response.url).query).get("i", ["0"])[0]
-            reply = self.request("POST", "cart.php?a=confproduct", spacing=self.spacing, data=dict(data, ajax="1"))
+            # The page's own steps: the configure form (ajax), the cart, checkout.
+            reply = self.request("POST", "cart.php?a=confproduct", spacing=self.spacing, referer=response.url,
+                                 headers={"X-Requested-With": "XMLHttpRequest"}, data=dict(data, ajax="1"))
             errors = BeautifulSoup(reply.text, "lxml").get_text(" ", strip=True)
             if errors:
                 self.empty_cart()
                 return self.order_failed(pid, name, "配置被拒：%s" % errors[:200])
+            view = self.request("GET", "cart.php?a=view", spacing=self.spacing, referer=response.url)
             if code:
                 self.apply_promo(code, data.get("token", ""))
-            page = self.request("GET", "cart.php?a=checkout", spacing=self.spacing)
+            page = self.request("GET", "cart.php?a=checkout", spacing=self.spacing, referer=view.url)
             form, totals = checkout_form(page.text, accept_tos=(mode != "tos"))
             total, balance = totals["total"], totals["balance"]
             label = info["cycles"].get(cycle, cycle) + (" · 优惠码 %s" % code if code else "")
@@ -926,7 +1042,8 @@ class BoilAutoBuyer:
                 self.empty_cart()
                 return OrderResult.WAIT
             if mode == "tos":
-                result = self.request("POST", "cart.php?a=checkout", spacing=self.spacing, data=form)
+                result = self.request("POST", "cart.php?a=checkout", spacing=self.spacing, data=form,
+                                      referer=urljoin(self.base_url, "cart.php?a=checkout"))
                 refused = "a=checkout" in result.url and invoice_id(result.url, result.text) is None
                 error = BeautifulSoup(result.text, "lxml").select_one(".checkout-error-feedback, .alert-danger")
                 print("TOS probe: refused=%s url=%s error=%r" % (
@@ -949,6 +1066,7 @@ class BoilAutoBuyer:
         future = pool.submit(
             self.session.post, urljoin(self.base_url, "cart.php?a=checkout"),
             data=form, timeout=float(self.cfg["checkout_wait_seconds"]),
+            headers={"Referer": urljoin(self.base_url, "cart.php?a=checkout"), "Origin": self.base_url.rstrip("/")},
         )
         alerted = False
         response = None
@@ -1044,7 +1162,7 @@ class BoilAutoBuyer:
                 if str(node.get("type") or "").lower() not in ("checkbox", "radio") or node.has_attr("checked")
             }
             action = urljoin(invoice_url, str(form.get("action") or invoice_url))
-            self.request("POST", action, spacing=float(self.cfg["order_spacing_seconds"]), data=data)
+            self.request("POST", action, spacing=float(self.cfg["order_spacing_seconds"]), referer=page.url, data=data)
             return "已提交“使用余额付款”"
         except Exception as exc:  # incl. BlockedError: the user must still hear about it
             LOG.exception("applying credit to %s failed", invoice_url)
@@ -1063,10 +1181,12 @@ class BoilAutoBuyer:
         return OrderResult.DROP if give_up else OrderResult.WAIT
 
     # -- armed links -----------------------------------------------------------
-    def attempt(self, url: str, quiet: bool = False, spacing: Optional[float] = None) -> str:
+    def attempt(self, url: str, quiet: bool = False, spacing: Optional[float] = None,
+                monitor_only: bool = False) -> str:
         kind, value = classify_url(url, self.base_url)
         if kind == "group" and value:
-            page = self.request("GET", url, spacing=spacing)
+            # Refresh line: read the group logged out.
+            page = self.request("GET", url, spacing=spacing, public=True)
             if "/store/%s" % value not in unquote(page.url):
                 self.presale.pop(url, None)
                 return OrderResult.WAIT
@@ -1082,11 +1202,15 @@ class BoilAutoBuyer:
             LOG.info("group %s: %d cards, %d matching", value, len(cards), len(matching))
             bought = False
             pending = False
+            opened = False
             waiting: List[str] = []
             for card in matching:
-                if card.product_id in self.dropped or card.product_id in self.price_dropped:
+                # The card's own 立即購買 link, never cart.php?a=add&pid= (BOIL
+                # blocks "直链下单" since Black Friday 2026).
+                key = str(card.metadata.get("card_url") or card.product_id)
+                if key in self.dropped or key in self.price_dropped:
                     continue
-                if self.failures.get(card.product_id, 0) >= int(self.cfg["max_order_failures"]):
+                if self.failures.get(key, 0) >= int(self.cfg["max_order_failures"]):
                     continue
                 if card.available is False:
                     # Sold out: wait for it, unless only a monitor or code armed this.
@@ -1095,7 +1219,11 @@ class BoilAutoBuyer:
                         waiting.append(card.product_id)
                         self.presale_started(card.product_id, card.name, url)
                     continue
-                result = self.order(card.product_id, quiet=quiet)
+                if not opened:
+                    # Buy line: open the group logged in, then click the card.
+                    self.request("GET", url, spacing=float(self.cfg["order_spacing_seconds"]))
+                    opened = True
+                result = self.order(key, quiet=quiet, referer=url)
                 if result == OrderResult.BOUGHT:
                     bought = True
                     if self.all_done():
@@ -1108,6 +1236,8 @@ class BoilAutoBuyer:
                 self.presale.pop(url, None)
             if bought:
                 return OrderResult.BOUGHT
+            if monitor_only and not matching:
+                return OrderResult.DROP  # the site monitor re-arms it for a target card
             if value in self.cfg["sale_groups"] or pending:
                 return OrderResult.WAIT
             return OrderResult.DROP  # a regular group with nothing left to try
@@ -1117,7 +1247,8 @@ class BoilAutoBuyer:
             return OrderResult.DROP
         return self.order(url, quiet=quiet)
 
-    def arm(self, urls: Iterable[str], source: str, public: bool, quiet: Iterable[str] = ()) -> None:
+    def arm(self, urls: Iterable[str], source: str, public: bool, quiet: Iterable[str] = (),
+            text: str = "") -> None:
         now = time.monotonic()
         until = now + float(self.cfg["arm_minutes"]) * 60
         quiet = set(quiet)
@@ -1125,11 +1256,16 @@ class BoilAutoBuyer:
         for url in urls:
             entry = self.armed.get(url)
             if entry is None:
-                self.armed[url] = {"since": now, "until": until, "public": public, "next": now,
-                                   "hidden_seen": None, "quiet": url in quiet}
+                self.armed[url] = {"since": now, "until": until, "public": public,
+                                   "next": max(now, self.blocked_until),
+                                   "hidden_seen": None, "quiet": url in quiet, "sources": {source},
+                                   "texts": [text] if text else []}
                 new.append(url)
             else:
                 entry["until"] = max(entry["until"], until)
+                entry.setdefault("sources", set()).add(source)
+                if text:
+                    entry.setdefault("texts", []).append(text)
                 if url not in quiet:
                     entry["quiet"] = False
                 if public and not entry["public"]:
@@ -1196,31 +1332,49 @@ class BoilAutoBuyer:
             return float(self.cfg["burst_seconds"]) if inside else max(0.5, min(interval, wait))
         return interval
 
+    def blocked(self, exc: Exception) -> None:
+        """A block page: no request to BOIL at all for ``blocked_pause_minutes``."""
+        minutes = float(self.cfg["blocked_pause_minutes"])
+        self.blocked_until = time.monotonic() + minutes * 60
+        for item in self.armed.values():
+            item["next"] = max(item["next"], self.blocked_until)
+        LOG.warning("blocked (%s): pausing %g min", exc, minutes)
+        links = [url for url, entry in self.armed.items() if entry["public"]]
+        self.notify("⛔ <b>BOIL 抢购：疑似被网站限流</b>\n%s\n暂停 %g 分钟，期间不再访问 BOIL（不换 IP 硬冲）。%s"
+                    % (html.escape(str(exc)), minutes,
+                       "\n要买请自己手动点：\n" + "\n".join(html.escape(url) for url in links) if links else ""))
+
     def poll_armed(self) -> bool:
         now = time.monotonic()
         for url in list(self.armed):
             if self.armed[url]["until"] < now:
                 LOG.info("disarming %s (window over)", url)
                 self.armed.pop(url, None)
+        if now < self.blocked_until:
+            return False
         due = [url for url, entry in self.armed.items() if entry["next"] <= time.monotonic()]
         # A burst window is open for a group with a target card waiting for stock.
         burst_open = (any(self.armed[url]["public"] and self.bursting(url) for url in due)
                       and self.burst_now()[0])
         fresh = float(self.cfg["burst_lead_seconds"]) + float(self.cfg["burst_tail_seconds"]) + 30
         since_check = time.monotonic() - self.last_login_check
-        if due and any(self.armed[url]["public"] for url in due) and (
-                since_check > 600 or (burst_open and since_check > fresh)):
-            # Warm up: be logged in with an empty cart before the first order
-            # (and again as each burst starts).
-            if not self.check_login():
-                for entry in self.armed.values():
-                    entry["next"] = time.monotonic() + 300
-                return False
-            if self.cart_dirty:
-                self.empty_cart()
-        if burst_open and (self.known_invoice is None or time.monotonic() - self.known_invoice[1] > fresh):
-            # The checkout won't have to read this during the burst.
-            self.known_invoice = (self.newest_invoice(), time.monotonic())
+        try:
+            if due and any(self.armed[url]["public"] for url in due) and (
+                    since_check > 600 or (burst_open and since_check > fresh)):
+                # Warm up: be logged in with an empty cart before the first order
+                # (and again as each burst starts).
+                if not self.check_login():
+                    for entry in self.armed.values():
+                        entry["next"] = time.monotonic() + 300
+                    return False
+                if self.cart_dirty:
+                    self.empty_cart()
+            if burst_open and (self.known_invoice is None or time.monotonic() - self.known_invoice[1] > fresh):
+                # The checkout won't have to read this during the burst.
+                self.known_invoice = (self.newest_invoice(), time.monotonic())
+        except BlockedError as exc:
+            self.blocked(exc)
+            return False
         for url in due:
             if self.stopping or self.switch.control.paused():
                 return False
@@ -1235,11 +1389,13 @@ class BoilAutoBuyer:
                 burst = self.bursting(url) and self.burst_now()[0]
                 self.beat(state="watching", detail="%s %s" % ("整点冲刺" if burst else "检查", url))
                 result = self.attempt(url, quiet=bool(entry.get("quiet")),
-                                      spacing=float(self.cfg["burst_seconds"]) if burst else None)
+                                      spacing=float(self.cfg["burst_seconds"]) if burst else None,
+                                      monitor_only=entry.get("sources") == {"boilcloud_sale"})
+                if (result == OrderResult.WAIT and self.sold_out
+                        and classify_url(url, self.base_url)[0] in ("pid", "product")):
+                    result = self.sold_out_link(url, entry)
             except BlockedError as exc:
-                self.notify("⛔ <b>BOIL 抢购：疑似被网站限流</b>\n%s\n暂停 30 分钟。" % html.escape(str(exc)))
-                for item in self.armed.values():
-                    item["next"] = time.monotonic() + 1800
+                self.blocked(exc)
                 return False
             except Exception as exc:  # a page changed under us; retry next round
                 LOG.exception("attempt on %s failed", url)
@@ -1255,8 +1411,64 @@ class BoilAutoBuyer:
                 self.armed.pop(url, None)
                 self.presale.pop(url, None)
             elif url in self.armed:
-                entry["next"] = time.monotonic() + self.interval_for(entry, url)
+                entry["next"] = time.monotonic() + (
+                    float(self.cfg["rush_spacing_seconds"]) if self.rushing(entry) else self.interval_for(entry, url))
         return False
+
+    def rushing(self, entry: Optional[Dict[str, Any]] = None) -> bool:
+        now = time.monotonic()
+        entries = [entry] if entry is not None else list(self.armed.values())
+        return any(item.get("rush_until", 0.0) > now for item in entries)
+
+    def sold_out_link(self, url: str, entry: Dict[str, Any]) -> str:
+        """A posted product link says 缺貨中. BOIL's post can beat the stock
+        by a couple of seconds (2026-11-26: post 22:59:58, stock about 23:00:00),
+        and the posted link is the most normal way in, so a link from Telegram
+        that may be a target is opened again every second for ``rush_seconds``
+        (user, 2026-11-27). Otherwise, or after that, it is sold out: dropped."""
+        now = time.monotonic()
+        if "rush_until" not in entry:
+            if not any(str(source).startswith("tg-") for source in entry.get("sources", ())):
+                LOG.info("%s is sold out; dropped", url)
+                return OrderResult.DROP
+            if not self.may_be_target(url, entry):
+                LOG.info("%s is sold out and not a target; dropped", url)
+                return OrderResult.DROP
+            entry["rush_until"] = now + float(self.cfg["rush_seconds"])
+            LOG.info("%s is sold out: opening it every %gs for %gs", url,
+                     float(self.cfg["rush_spacing_seconds"]), float(self.cfg["rush_seconds"]))
+            return OrderResult.WAIT
+        if now < entry["rush_until"]:
+            return OrderResult.WAIT
+        LOG.info("%s still sold out after %gs; dropped", url, float(self.cfg["rush_seconds"]))
+        self.notify("😶 <b>BOIL 抢购：TG 链接 %g 秒内一直缺货，放弃</b>\n%s"
+                    % (float(self.cfg["rush_seconds"]), html.escape(url)))
+        return OrderResult.DROP
+
+    def may_be_target(self, url: str, entry: Dict[str, Any]) -> bool:
+        """Whether a sold-out posted link may be a target. A post naming a
+        target with no excluded word: yes. Otherwise its card on the public
+        group page decides (a blind box post names 日本 but also 盲盒 / NAT;
+        a SeedNet post may say 非 NAT); no card found: yes if the post names a
+        target at all (the configure page decides once it has stock)."""
+        left = [target for target in self.targets if target["key"] not in self.done]
+        texts = [str(text) for text in entry.get("texts") or [] if text]
+        if any(text_matches(text, target["include"], self.cfg["name_exclude"]) for text in texts for target in left):
+            return True
+        kind, value = classify_url(url, self.base_url)
+        if kind == "product":
+            group = urlparse(str(value)).path.strip("/").split("/")[1]
+        else:
+            group = str(self.cfg["sale_groups"][0])
+        group_url = urljoin(self.base_url, "store/%s" % group)
+        page = self.request("GET", group_url, spacing=float(self.cfg["rush_spacing_seconds"]), public=True)
+        for card in self.parser.parse_category(page.text, page.url, group):
+            card_path = urlparse(str(card.metadata.get("card_url") or "")).path.rstrip("/")
+            if (kind == "product" and card_path == urlparse(str(value)).path.rstrip("/")) or (
+                    kind == "pid" and card.product_id == str(value)):
+                target = match_target("%s %s" % (card.name, card.metadata.get("description") or ""), self.cfg)
+                return target is not None and target["key"] not in self.done
+        return any(mentions(text, target["include"]) for text in texts for target in left)
 
     def idle_detail(self) -> str:
         left = "、".join(t["label"] for t in self.targets if t["key"] not in self.done)
@@ -1290,22 +1502,26 @@ class BoilAutoBuyer:
                     source = str(trigger.get("source"))
                     if source.startswith("tg-"):
                         self.learn_codes(promo_codes(str(trigger.get("text") or "")), source)
-                    targets = trigger_targets(trigger, self.cfg)
+                    targets = trigger_targets(trigger, self.cfg, self.done)
                     if targets:
                         self.arm(targets, source, trigger_is_public(trigger),
-                                 [url for url in targets if quiet_target(url, trigger, self.cfg)])
+                                 [url for url in targets if quiet_target(url, trigger, self.cfg)],
+                                 str(trigger.get("text") or ""))
                     else:
                         LOG.info("trigger from %s arms nothing: %s", trigger.get("source"), trigger.get("urls"))
                 if self.armed:
                     if self.poll_armed():
                         continue
-                elif time.monotonic() - self.last_login_check >= login_every:
+                elif (time.monotonic() - self.last_login_check >= login_every
+                      and time.monotonic() >= self.blocked_until):
                     try:
                         self.check_login()
+                    except BlockedError as exc:
+                        self.blocked(exc)
                     except Exception:
                         LOG.exception("login check failed")
                 self.beat(state="watching", detail=self.idle_detail())
-                time.sleep(1)
+                time.sleep(0.2 if self.rushing() else 1)
         finally:
             self.beat(state="stopped", detail="进程已退出")
         return 0

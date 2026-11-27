@@ -192,9 +192,15 @@ boil_autobuy:
     - https://cloud.boil.network/store/festive-offer
   arm_minutes: 360
   fast_poll_seconds: 20
-  fast_minutes: 30
-  slow_poll_seconds: 60
+  fast_minutes: 10
+  # 2026-11-27: 60 s polls of an open festive-offer (Black Friday blind box)
+  # for 18 h got the AWS IP blocked by BOIL's Cloudflare; back to 5 min, and
+  # only a target card wakes the buyer.
+  slow_poll_seconds: 300
+  blocked_pause_minutes: 60
   login_check_hours: 12
+  # Through TCS SeedNet (dynamic IP, can be changed): boil-egress.service.
+  proxy: socks5://127.0.0.1:1082
 
 suspicious_keywords:
   - test
@@ -330,6 +336,7 @@ providers:
     categories: [festive-offer]
     autobuy_trigger_dir: data/autobuy/boil_triggers
     interval_seconds: 300
+    proxy: socks5://127.0.0.1:1082  # boil-egress.service (TCS SeedNet)
     # 2026-11-11 (user): kept only to wake the BOIL buyer. The one alert left
     # is festive-offer opening or closing (the hidden-link heads-up); cards,
     # Taiwan SeedNet stock and new feed PIDs are silent.

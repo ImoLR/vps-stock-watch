@@ -1,0 +1,13 @@
+[Unit]
+Description=SOCKS egress for BOIL (boilcloud_sale + boil-autobuy): SSH -D to TCS SeedNet tcsseednet.imgamer.top (dynamic IP), key limited to cloud.boil.network:443
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -N -D 127.0.0.1:1082 -i /root/.ssh/id_ed25519_boil_egress -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes root@tcsseednet.imgamer.top
+Restart=always
+RestartSec=20
+MemoryMax=50M
+
+[Install]
+WantedBy=multi-user.target
