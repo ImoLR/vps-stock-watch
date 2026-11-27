@@ -79,3 +79,79 @@ def take_triggers(directory: str, now: Optional[float] = None) -> List[Dict[str,
             continue
         result.append(data)
     return result
+
+
+# -- alert windows ------------------------------------------------------------
+# A sale may be near (the sale page opened or emptied, a target card waits
+# for stock, an announcement without a link): for a while the Telegram relay
+# also asks the channel for its newest post every few seconds, in case
+# Telegram's push is slow (2026-11-26: 5 s), and the buyer looks for triggers
+# more often. Outside these windows the relay only gets pushes (user,
+# 2026-11-27: not all the time; the user's own Telegram account is used).
+
+def open_alert(
+    path: Optional[str],
+    reason: str,
+    minutes: float,
+    every: float,
+    start: Optional[float] = None,
+    hourly: bool = False,
+    cooldown_minutes: float = 60,
+    now: Optional[float] = None,
+) -> bool:
+    """Add a window (``every`` seconds between pulls; ``hourly``: 2 s around
+    each full hour). The same ``reason`` opens at most once per cooldown.
+    Never raises."""
+    if not path:
+        return False
+    now = time.time() if now is None else now
+    try:
+        target = Path(path)
+        try:
+            data = json.loads(target.read_text("utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        opened = {str(key): float(value) for key, value in (data.get("opened") or {}).items()
+                  if now - float(value) < 24 * 3600}
+        if now - opened.get(reason, float("-inf")) < cooldown_minutes * 60:
+            return False
+        begin = now if start is None else float(start)
+        windows = [item for item in data.get("windows") or [] if float(item.get("end", 0)) > now]
+        windows.append({"reason": reason, "start": begin, "end": begin + minutes * 60,
+                        "every": float(every), "hourly": bool(hourly)})
+        opened[reason] = now
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"windows": windows, "opened": opened}, ensure_ascii=False), "utf-8")
+        os.replace(str(tmp), str(target))
+        LOG.info("alert window %s: %.0f min, every %gs%s", reason, minutes, every, " (hourly 2 s)" if hourly else "")
+        return True
+    except (OSError, ValueError, TypeError):
+        LOG.exception("cannot open alert window %s", reason)
+        return False
+
+
+def alert_every(path: Optional[str], now: Optional[float] = None) -> Optional[float]:
+    """Seconds between channel pulls right now, or None outside every window."""
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    now = time.time() if now is None else now
+    best: Optional[float] = None
+    for item in data.get("windows") or []:
+        try:
+            if not float(item["start"]) <= now < float(item["end"]):
+                continue
+            every = float(item["every"])
+            if item.get("hourly"):
+                local = time.localtime(now)
+                second = local.tm_min * 60 + local.tm_sec
+                if second >= 59 * 60 or second <= 90:  # :59:00 - :01:30
+                    every = min(every, 2.0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        best = every if best is None else min(best, every)
+    return best

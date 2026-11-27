@@ -9,11 +9,14 @@ User=root
 Group=root
 WorkingDirectory=/root/projects/vps-stock-watch/vps-stock-watch
 EnvironmentFile=/root/projects/vps-stock-watch/vps-stock-watch/.env
-# Plain HTTP (WHMCS has no captcha): no browser, no virtual display.
-ExecStart=/root/projects/vps-stock-watch/vps-stock-watch/.venv/bin/python -m watcher.boil_autobuy --config /root/projects/vps-stock-watch/vps-stock-watch/config.yaml
+Environment=PLAYWRIGHT_BROWSERS_PATH=/root/projects/vps-stock-watch/vps-stock-watch/.playwright-browsers
+# Plain HTTP for every page; since 2026-11-27 cart.php sits behind a Cloudflare
+# challenge, so a plain Chromium on a virtual display opens it now and then to
+# renew cf_clearance (watcher.boil_autobuy.refresh_clearance).
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x900x24" /root/projects/vps-stock-watch/vps-stock-watch/.venv/bin/python -m watcher.boil_autobuy --config /root/projects/vps-stock-watch/vps-stock-watch/config.yaml
 Restart=on-failure
 RestartSec=1min
-MemoryMax=200M
+MemoryMax=700M
 KillMode=mixed
 TimeoutStopSec=40
 

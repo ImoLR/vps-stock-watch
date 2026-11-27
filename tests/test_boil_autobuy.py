@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import tempfile
@@ -379,6 +380,8 @@ class BuyerTest(unittest.TestCase):
             "account_file": str(Path(tmp) / "none.env"),
             "trigger_dir": str(Path(tmp) / "triggers"),
             "promo_file": str(Path(tmp) / "promo.json"),
+            "alert_file": str(Path(tmp) / "alert.json"),
+            "clearance_file": str(Path(tmp) / "clearance.json"),
             "page_spacing_seconds": 0, "order_spacing_seconds": 0,
         }}
         with patch.object(ba, "STATUS_DIR", str(Path(tmp) / "status")), \
@@ -587,7 +590,8 @@ class BuyerTest(unittest.TestCase):
             config = {"boil_autobuy": {"proxy": "socks5://127.0.0.1:1082",
                                        "marker_file": str(Path(tmp) / "done.json"),
                                        "cookie_file": str(Path(tmp) / "cookies.json"),
-                                       "promo_file": str(Path(tmp) / "promo.json")}}
+                                       "promo_file": str(Path(tmp) / "promo.json"),
+                                       "clearance_file": str(Path(tmp) / "clearance.json")}}
             with patch.object(ba, "STATUS_DIR", str(Path(tmp) / "status")), \
                     patch.object(ba, "telegram_credentials", return_value={"token": None, "chat_id": None}):
                 buyer = ba.BoilAutoBuyer(config, args)
@@ -684,6 +688,42 @@ class BuyerTest(unittest.TestCase):
             with self.assertRaises(ba.requests.ConnectionError):
                 buyer.request("POST", "cart.php?a=checkout", data={})
             self.assertEqual(buyer.session.request.call_count, 1)
+
+    def test_cloudflare_challenge_renews_the_clearance_and_retries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            buyer = self.buyer(tmp, site)
+            challenge = resp("<title>Just a moment...</title>", BASE + "cart.php?a=view", status=403,
+                             headers={"cf-mitigated": "challenge"})
+            answers = [challenge, resp(cart_view(0), BASE + "cart.php?a=view")]
+            buyer.session.request = mock.Mock(side_effect=lambda *a, **k: answers.pop(0))
+
+            def renew():
+                buyer._apply_clearance("Mozilla/5.0 Chrome/148", {"value": "clr", "domain": ".cloud.boil.network"})
+                return True
+
+            with patch.object(buyer, "refresh_clearance", side_effect=renew) as refresh:
+                buyer.check_cart()
+            refresh.assert_called_once()
+            self.assertEqual(buyer.session.request.call_count, 2)
+            self.assertFalse(buyer.cart_dirty)
+            for session in (buyer.session, buyer.public_session):
+                self.assertEqual(session.headers["User-Agent"], "Mozilla/5.0 Chrome/148")
+                self.assertEqual(session.cookies.get("cf_clearance"), "clr")
+            # Chromium could not pass it either: a block.
+            buyer.session.request = mock.Mock(return_value=challenge)
+            with patch.object(buyer, "refresh_clearance", return_value=False):
+                with self.assertRaises(ba.BlockedError):
+                    buyer.check_cart()
+
+    def test_pac_sends_only_boil_and_the_challenge_host_through_the_tunnel(self):
+        url = ba.pac_script(["cloud.boil.network", "challenges.cloudflare.com"], "socks5://127.0.0.1:1082")
+        body = base64.b64decode(url.split(",", 1)[1]).decode()
+        self.assertIn('host == "cloud.boil.network" || host == "challenges.cloudflare.com"', body)
+        self.assertIn('"SOCKS5 127.0.0.1:1082"', body)
+        self.assertIn('return "DIRECT"', body)
+        self.assertTrue(ba.cf_challenge(resp("x", headers={"cf-mitigated": "challenge"})))
+        self.assertFalse(ba.cf_challenge(resp("<title>Attention Required! | Cloudflare</title>", status=403)))
 
     def test_hidden_group_is_never_opened_logged_in(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -832,6 +872,8 @@ class BuyerTest(unittest.TestCase):
                 buyer.poll_armed()
                 self.assertTrue(buyer.bursting(url))
                 self.assertIn("还没放货", buyer.sent[0])
+                # The TG relay pulls the channel for a while too.
+                self.assertIn(ba.alert_every(str(Path(tmp) / "alert.json")), (2.0, 5.0))
                 self.assertIsNone(site.posted_checkout)
                 # Outside a window: back no later than the window opens.
                 self.assertAlmostEqual(buyer.armed[url]["next"] - time.monotonic(), 20.0, delta=1)

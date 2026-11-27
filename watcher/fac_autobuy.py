@@ -258,10 +258,11 @@ def chrome_executable() -> str:
 class ChromeSession:
     """A plain Chromium on the current DISPLAY, attached over localhost CDP."""
 
-    def __init__(self, executable: str, profile_dir: str, port: int):
+    def __init__(self, executable: str, profile_dir: str, port: int, extra_args: Sequence[str] = ()):
         self.executable = executable
         self.profile_dir = Path(profile_dir)
         self.port = port
+        self.extra_args = list(extra_args)
         self.process: Optional[subprocess.Popen] = None
         self._playwright = None
         self.browser = None
@@ -280,6 +281,7 @@ class ChromeSession:
             raise RuntimeError("CDP port %s is already in use" % self.port)
         args = [
             self.executable,
+            *self.extra_args,
             "--no-sandbox",
             "--user-data-dir=%s" % self.profile_dir.resolve(),
             "--no-first-run",

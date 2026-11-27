@@ -79,6 +79,17 @@ fac_tg_watch:
         優惠碼, 优惠码, 折扣碼, 折扣码, 上架, 上新, 補貨, 补货, 限時, 限时, 限量,
         活動, 活动, 開賣, 开卖, 下單鏈接, 下单链接,
       ]
+      # 2026-11-27 (user): alert windows. While one is open (sale page opened
+      # or emptied, a target card waiting for stock, or an announcement like
+      # the ones below without a shop link) the channel is also pulled every
+      # few seconds, as Telegram's push took 2.6-5 s on Black Friday; else
+      # push only. At most pull_daily_cap pulls a day; a flood wait stops them.
+      alert_file: data/autobuy/boil_alert.json
+      prep_words: [
+        黑五, black friday, 盲盒, 開賣, 开卖, 特賣, 特卖, 上架, 上新, 限量, 搶購, 抢购,
+        預告, 预告, 即將, 即将, 稍後, 稍后, 聖誕, 圣诞, 新年, 週年, 周年, 年付, 第二彈, 第二弹,
+      ]
+      pull_daily_cap: 600
   # 2026-11-26 (user): LeiKwan chat group, read for 利群會聚 and sales. The
   # owner's or the sales lead's message with a sale/topic word (and channel
   # posts forwarded into the group) is sent at once; members' 會聚 talk is
@@ -337,6 +348,7 @@ providers:
     autobuy_trigger_dir: data/autobuy/boil_triggers
     interval_seconds: 300
     proxy: socks5://127.0.0.1:1082  # boil-egress.service (TCS SeedNet)
+    alert_file: data/autobuy/boil_alert.json  # sale page opened / emptied -> TG pull window
     # 2026-11-11 (user): kept only to wake the BOIL buyer. The one alert left
     # is festive-offer opening or closing (the hidden-link heads-up); cards,
     # Taiwan SeedNet stock and new feed PIDs are silent.

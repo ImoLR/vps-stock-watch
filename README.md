@@ -913,6 +913,25 @@ systemctl enable --now fac-autobuy`。改了触发钩子后，`fac-tg-watch` 和
   1 秒（约定的抢购目标；2026-11-26 前是 1.5 秒），平时轮询和菜单检查隔 4 秒。
 - 清空购物车：打开购物车页，有东西才提交页面上「清空購物車」的表单（POST）。2026-11-27 直接 GET `cart.php?a=empty`
   被 BOIL 回了 403（同一时间活动页正常），所以浏览器不会自己打开的网址一律不用。已知是空的就不看。
+- **Cloudflare 验证（2026-11-27 起）**：BOIL 给 `cart.php`（购物车、配置、结账）加了 Cloudflare 的浏览器验证（403「Just a moment...」，
+  响应头 `cf-mitigated: challenge`；不登录也一样，不是账号问题）。纯 HTTP 过不去，但真 Chromium 会自己通过（约 15–25 秒）。
+  通过后拿到的 `cf_clearance`，配上同一个浏览器标识（UA）、同一个出口 IP，纯 HTTP 也能进。所以：
+  - 下单仍是纯 HTTP（快，省内存）。请求遇到验证页时，开一次普通 Chromium（照 FAC 的做法：先单独启动，Playwright 再连上去，
+    不用 Playwright 直接启动），资料目录 `data/boil_profile`，CDP 端口 9294。它只让 BOIL 和 `challenges.cloudflare.com`
+    走隧道（PAC），打开购物车页，等验证通过，把 `cf_clearance` 和 UA 交给两条线，存到 `data/boil_clearance.json`，然后关掉，
+    再把原请求重发一次。还是验证页就按被拦处理。
+  - 保鲜：空闲时每 30 分钟（`clearance_check_minutes`）打开一次购物车页，准备下单前超过 5 分钟没看也会看一次，
+    这样下单时不用等浏览器。日志「cart page ok; clearance N min old」记下通行证的年龄，用来实测 BOIL 的通行证能用多久。
+  - 隧道的 key 也放行了 `challenges.cloudflare.com:443`（验证要用）。服务改成在 `xvfb-run` 下运行，MemoryMax 700M
+    （Chromium 开着时约 470 MB 峰值）。
+- **TG 警戒窗口（2026-11-27 起，用户）**：TG 本来就是推送的，但第一弹的推送晚了约 5 秒（第二弹 2.6 秒；中继日志常见
+  `PersistentTimestampOutdatedError`，即 Telegram 拉频道更新时内部出错）。所以有信号时，中继额外主动拉频道最新一条：
+  - 谁开窗口（都写 `data/autobuy/boil_alert.json`，`fac_trigger.open_alert`）：监控看到活动页开放或清空/关闭 → 30 分钟，
+    每 5 秒，每个整点 :59:00–:01:30 每 2 秒；抢购程序看到符合目标、还没货的卡 → 同上；频道或官方账号发预告帖（`prep_words`，
+    没有商城链接）→ 20 分钟每 3 秒，帖子里写了时间（「23:00」「0:00 JST」）就改成那个时间前 2 分钟到后 3 分钟、每 2 秒。
+  - 限制：同一种信号一小时内只开一次；每天最多拉 600 次（`pull_daily_cap`）；遇到 FloodWait 就停拉 30 分钟以上，只靠推送。
+    平时完全不拉。拉到的帖子和推送来的走同一套处理（按内容去重，不会处理两次）。
+  - 窗口期间抢购程序每 0.2 秒看一次触发文件（平时 1 秒）。
 - 整点冲刺（用户 2026-11-26）：BOIL 整点放货（黑五盲盒：0 库存的卡先挂在公开的 festive-offer，
   0:00 JST 放货，1 分钟卖完）。公开的活动分组里出现**符合目标**但还没货的卡时，发一次 TG，然后在台湾时间
   8–23 点每个整点前 30 秒到后 60 秒，每 3 秒看一次这个分组，有货马上下单；冲刺开始时先确认登录、清空购物车、

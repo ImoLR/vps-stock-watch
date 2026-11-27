@@ -57,6 +57,7 @@ Telegram /autobuy).
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import html
 import json
@@ -78,7 +79,7 @@ from urllib3.exceptions import NewConnectionError
 
 from .autobuy_status import Control, Heartbeat, Switch
 from .config import load_config, telegram_credentials
-from .fac_trigger import take_triggers
+from .fac_trigger import alert_every, open_alert, take_triggers
 from .providers.base import is_challenge_page
 from .providers.boilcloud import BoilcloudProvider
 from .telegram import TelegramClient, TelegramError
@@ -158,6 +159,17 @@ DEFAULTS: Dict[str, Any] = {
     "rush_spacing_seconds": 1.0,
     # The tunnel is down: straight from this host for this long.
     "direct_fallback_minutes": 10,
+    # cart.php sits behind a Cloudflare managed challenge (2026-11-27): a
+    # plain Chromium passes it by itself (~15-25 s) and its cf_clearance,
+    # with the same user agent and IP, lets these HTTP sessions in. The cart
+    # page is looked at this often to keep it fresh.
+    "browser_profile": "data/boil_profile",
+    "browser_port": 9294,
+    "clearance_file": "data/boil_clearance.json",
+    "clearance_timeout_seconds": 60,
+    "clearance_check_minutes": 30,
+    # Alert windows shared with the TG relay and the monitor (fac_trigger).
+    "alert_file": "data/autobuy/boil_alert.json",
     # Hourly bursts (user, 2026-11-26). BOIL puts sale stock out on the hour:
     # the 2026 Black Friday box sat in the public festive-offer with 0 stock
     # from ~22:55, got its stock at 0:00 JST (23:00 TW) and was gone in a
@@ -228,6 +240,22 @@ def empty_cart_form(page_html: str, page_url: str) -> Optional[Tuple[str, Dict[s
                 for node in form.select("input[name]") if str(node.get("type") or "").lower() != "checkbox"}
         return urljoin(page_url, action or page_url), data
     return None
+
+
+def cf_challenge(response: Any) -> bool:
+    """Cloudflare's managed challenge ("Just a moment..."), not a block page."""
+    headers = getattr(response, "headers", None) or {}
+    if str(headers.get("cf-mitigated") or "").lower() == "challenge":
+        return True
+    return "<title>just a moment" in (getattr(response, "text", "") or "")[:3000].lower()
+
+
+def pac_script(hosts: Iterable[str], proxy: str) -> str:
+    """A PAC file sending only ``hosts`` through the SOCKS ``proxy``, as a data: URL."""
+    hostport = urlparse(proxy).netloc
+    test = " || ".join('host == "%s"' % host for host in hosts)
+    body = 'function FindProxyForURL(url, host) { if (%s) return "SOCKS5 %s"; return "DIRECT"; }' % (test, hostport)
+    return "data:application/x-javascript-config;base64," + base64.b64encode(body.encode()).decode()
 
 
 def not_sent(exc: Exception) -> bool:
@@ -702,6 +730,10 @@ class BoilAutoBuyer:
         self.last_login_check = float("-inf")
         self.blocked_until = float("-inf")
         self.direct_until = float("-inf")
+        self.clearance_path = Path(str(cfg["clearance_file"]))
+        self.clearance_tried = float("-inf")
+        self.last_cart_check = float("-inf")
+        self._load_clearance()
         # Set by add_to_cart: the last product page said 缺貨中.
         self.sold_out = False
         self.stopping = False
@@ -819,6 +851,9 @@ class BoilAutoBuyer:
         if headers:
             kwargs["headers"] = headers
         response = self._send(session, method, urljoin(self.base_url, url), **kwargs)
+        if cf_challenge(response) and method == "GET" and self.refresh_clearance():
+            self.last_page_at = time.monotonic()
+            response = self._send(session, method, urljoin(self.base_url, url), **kwargs)
         if response.status_code in (403, 429) or is_challenge_page(response.text):
             raise BlockedError("HTTP %s for %s" % (response.status_code, url))
         if not public:
@@ -844,6 +879,102 @@ class BoilAutoBuyer:
             self.notify("⚠️ <b>BOIL 隧道不通</b>（%s）\n接下来 %g 分钟改从本机（AWS）直连 BOIL。"
                         % (html.escape(type(exc).__name__), minutes))
             return session.request(method, url, proxies=direct, **kwargs)
+
+    # -- Cloudflare clearance ------------------------------------------------
+    def _load_clearance(self) -> None:
+        try:
+            saved = json.loads(self.clearance_path.read_text("utf-8"))
+            self._apply_clearance(saved["ua"], saved["cookie"])
+            self.clearance_at = float(saved.get("at") or 0)
+        except (OSError, ValueError, KeyError, TypeError):
+            self.clearance_at = 0.0
+
+    def _apply_clearance(self, ua: str, cookie: Dict[str, Any]) -> None:
+        for session in (self.session, self.public_session):
+            session.headers["User-Agent"] = ua
+            session.cookies.set("cf_clearance", str(cookie["value"]),
+                                domain=str(cookie.get("domain") or ".cloud.boil.network"), path=str(cookie.get("path") or "/"))
+
+    def refresh_clearance(self) -> bool:
+        """Open the cart page once in a plain Chromium (it passes Cloudflare's
+        challenge by itself), then give its cf_clearance and user agent to
+        both HTTP sessions. Only BOIL and Cloudflare's challenge host go
+        through the tunnel, so the clearance matches the IP of every request."""
+        now = time.monotonic()
+        if now - self.clearance_tried < 120:
+            return False  # just tried: a challenge again now is a real problem
+        self.clearance_tried = now
+        if not os.environ.get("DISPLAY"):
+            LOG.error("Cloudflare challenge on cart.php, but no DISPLAY for Chromium (run under xvfb-run)")
+            return False
+        from .fac_autobuy import ChromeSession, chrome_executable
+
+        proxy = str(self.cfg.get("proxy") or "").strip()
+        args = []
+        if proxy and now >= self.direct_until:
+            args.append("--proxy-pac-url=" + pac_script(
+                [urlparse(self.base_url).hostname, "challenges.cloudflare.com"], proxy))
+        old_age = (time.time() - self.clearance_at) / 60 if self.clearance_at else None
+        chrome = ChromeSession(chrome_executable(), str(self.cfg["browser_profile"]), int(self.cfg["browser_port"]), args)
+        cookie = None
+        try:
+            chrome.start()
+            chrome.page.goto(urljoin(self.base_url, "cart.php?a=view"), wait_until="domcontentloaded", timeout=40000)
+            # Passed: the cookie is set and the shop's own page is back (on the
+            # way the title is briefly a token, and the page navigates).
+            deadline = now + float(self.cfg["clearance_timeout_seconds"])
+            while time.monotonic() < deadline:
+                time.sleep(1)
+                cookie = next((item for item in chrome.page.context.cookies(self.base_url)
+                               if item["name"] == "cf_clearance"), None)
+                try:
+                    title = chrome.page.title()
+                except Exception:  # navigating
+                    title = ""
+                if cookie is not None and "boilcloud" in title.lower():
+                    break
+            # The user agent the page really sends (Chrome reduces it to
+            # Chrome/N.0.0.0; the clearance is tied to that exact string).
+            ua = ""
+            for _ in range(5):
+                try:
+                    ua = str(chrome.page.evaluate("navigator.userAgent"))
+                    break
+                except Exception:  # still navigating
+                    time.sleep(1)
+            if not ua:
+                full = str(chrome.browser.new_browser_cdp_session().send("Browser.getVersion")["userAgent"])
+                ua = re.sub(r"Chrome/(\d+)[\d.]*", r"Chrome/\1.0.0.0", full)
+        except Exception:
+            LOG.exception("Chromium could not pass the Cloudflare challenge")
+        finally:
+            chrome.stop()
+        if cookie is None:
+            LOG.warning("no cf_clearance after %.0fs", time.monotonic() - now)
+            return False
+        self._apply_clearance(ua, cookie)
+        self.clearance_at = time.time()
+        try:
+            self.clearance_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.clearance_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"ua": ua, "cookie": cookie, "at": self.clearance_at}), "utf-8")
+            os.chmod(tmp, 0o600)
+            tmp.replace(self.clearance_path)
+        except OSError:
+            LOG.exception("cannot save the clearance")
+        LOG.info("cf_clearance renewed in %.0fs%s", time.monotonic() - now,
+                 " (the last one was %.0f min old)" % old_age if old_age is not None else "")
+        return True
+
+    def check_cart(self) -> None:
+        """Open the cart page (renewing the clearance if Cloudflare asks) and
+        empty it if anything is in it."""
+        self.cart_dirty = True
+        self.empty_cart()
+        self.last_cart_check = time.monotonic()
+        # How long BOIL's clearance lasts is not known yet: this shows it.
+        LOG.info("cart page ok; clearance %s", "%.0f min old" % ((time.time() - self.clearance_at) / 60)
+                 if self.clearance_at else "not needed")
 
     # -- login -------------------------------------------------------------
     @staticmethod
@@ -1301,6 +1432,7 @@ class BoilAutoBuyer:
             return
         self.presale_seen[pid] = time.time()
         cfg = self.cfg
+        open_alert(str(cfg["alert_file"]), "target-card-%s" % pid, 30, 5, hourly=True)
         LOG.info("target card %s (%s) in %s has no stock yet: hourly bursts on", pid, name, url)
         self.notify(
             "⏰ <b>BOIL 活动页出现目标商品，还没放货</b>：%s\n%s\n每个整点（%s 点，台湾时间）前 %d 秒到后 %d 秒"
@@ -1367,8 +1499,8 @@ class BoilAutoBuyer:
                     for entry in self.armed.values():
                         entry["next"] = time.monotonic() + 300
                     return False
-                if self.cart_dirty:
-                    self.empty_cart()
+                if self.cart_dirty or time.monotonic() - self.last_cart_check > 300:
+                    self.check_cart()
             if burst_open and (self.known_invoice is None or time.monotonic() - self.known_invoice[1] > fresh):
                 # The checkout won't have to read this during the burst.
                 self.known_invoice = (self.newest_invoice(), time.monotonic())
@@ -1520,8 +1652,19 @@ class BoilAutoBuyer:
                         self.blocked(exc)
                     except Exception:
                         LOG.exception("login check failed")
+                elif (time.monotonic() - self.last_cart_check >= float(self.cfg["clearance_check_minutes"]) * 60
+                      and time.monotonic() >= self.blocked_until):
+                    # Keeps Cloudflare's clearance fresh, so a buy never waits for Chromium.
+                    try:
+                        self.check_cart()
+                    except BlockedError as exc:
+                        self.blocked(exc)
+                    except Exception:
+                        LOG.exception("cart check failed")
+                        self.last_cart_check = time.monotonic()
                 self.beat(state="watching", detail=self.idle_detail())
-                time.sleep(0.2 if self.rushing() else 1)
+                # Triggers are looked for more often while a sale may be near.
+                time.sleep(0.2 if self.rushing() or alert_every(str(self.cfg["alert_file"])) else 1)
         finally:
             self.beat(state="stopped", detail="进程已退出")
         return 0

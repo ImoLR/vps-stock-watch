@@ -46,14 +46,14 @@ import os
 import re
 import sys
 import time
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 import requests
 
 from .config import load_config, telegram_credentials
-from .fac_trigger import post_trigger
+from .fac_trigger import alert_every, open_alert, post_trigger
 from .providers.tgchannel import keyword_labels, resolve_links
 from .telegram import TelegramClient as BotClient
 from .telegram import TelegramError, format_channel_post
@@ -347,6 +347,13 @@ class Relay:
         self.promo_url = str(item.get("promo_url") or "")
         trigger_dir = item.get("autobuy_trigger_dir")
         self.trigger_dir = str(base / str(trigger_dir)) if trigger_dir else None
+        # BOIL (2026-11-27): alert windows, during which the channel is also
+        # pulled (see watcher.fac_trigger.open_alert). An announcement from the
+        # channel or staff with these words but no shop link opens one.
+        alert_file = item.get("alert_file")
+        self.alert_file = str(base / str(alert_file)) if alert_file else None
+        self.prep_words = [str(word) for word in item.get("prep_words") or []]
+        self.pull_daily_cap = int(item.get("pull_daily_cap", 600))
         self.admins: Set[int] = set()
         self.admins_at = 0.0
 
@@ -358,6 +365,39 @@ class Relay:
         if getattr(user, "bot", False):
             return bool(self.bot_prefix) and username.startswith(self.bot_prefix)
         return True
+
+
+def announced_time(text: str, now: Optional[float] = None) -> Optional[float]:
+    """The sale time an announcement names ("23:00", "0:00 JST"), as a Unix
+    time within the next day (this host runs on Taiwan / China time)."""
+    match = re.search(r"(?<!\d)([01]?\d|2[0-3])\s*[:：]\s*([0-5]\d)(?!\d)", text or "")
+    if not match:
+        return None
+    now = time.time() if now is None else now
+    base = datetime.fromtimestamp(now).replace(hour=int(match.group(1)), minute=int(match.group(2)),
+                                               second=0, microsecond=0)
+    when = base.timestamp()
+    if re.search(r"JST|日本時間|日本时间", text[match.start():match.end() + 12], re.I):
+        when -= 3600  # JST is an hour ahead
+    if when < now - 300:
+        when += 24 * 3600
+    return when if when - now <= 24 * 3600 else None
+
+
+def open_prep_alert(relay: "Relay", text: str, urls: Iterable[str], now: Optional[float] = None) -> bool:
+    """An announcement (sale words, no shop link) opens an alert window: 20
+    minutes at 3 s, or 2 s from 2 minutes before to 3 minutes after the time
+    it names."""
+    if not relay.alert_file or not relay.prep_words or relay.link.search(" ".join(urls) + " " + (text or "")):
+        return False
+    lowered = (text or "").casefold()
+    if not any(word.casefold() in lowered for word in relay.prep_words):
+        return False
+    now = time.time() if now is None else now
+    when = announced_time(text, now)
+    if when is not None and when - now > 120:
+        return open_alert(relay.alert_file, "announce-%d" % int(when), 5, 2, start=when - 120, now=now)
+    return open_alert(relay.alert_file, "announce", 20, 3, now=now)
 
 
 class FacTelegramWatch:
@@ -463,6 +503,7 @@ class FacTelegramWatch:
                     return
             urls = message_urls(message.raw_text, message.entities, message.buttons)
             self.trigger("tg-channel", message.raw_text, urls, True, relay)
+            open_prep_alert(relay, message.raw_text, urls)
             await self.notify(
                 format_relay(
                     "channel",
@@ -499,6 +540,8 @@ class FacTelegramWatch:
         if not reason:
             return
         self.trigger("tg-group", message.raw_text, urls, is_admin, relay)
+        if is_admin:
+            open_prep_alert(relay, message.raw_text, urls)
         sender = await message.get_sender()
         link = "https://t.me/c/%s/%s" % (str(relay.group_id)[4:], message.id)
         await self.notify(
@@ -678,6 +721,51 @@ class FacTelegramWatch:
         for message in missed:
             await self.handle_channel(message)
 
+    async def _alert_loop(self) -> None:
+        """Inside an alert window, also ask the channel for its newest post
+        (one message, ``every`` seconds) in case Telegram's push is slow; a
+        post found first is handled exactly like a pushed one (no repeats)."""
+        from telethon.errors import FloodWaitError
+
+        relays = [relay for relay in self.relays if relay.alert_file]
+        last_pull: Dict[str, float] = {}
+        pulls: Dict[str, int] = {}
+        paused_until = 0.0
+        capped: Set[str] = set()
+        while True:
+            await asyncio.sleep(0.5)
+            for relay in relays:
+                every = alert_every(relay.alert_file)
+                if every is None or time.time() < paused_until:
+                    continue
+                if time.monotonic() - last_pull.get(relay.name, float("-inf")) < every:
+                    continue
+                day = "%s:%s" % (relay.name, time.strftime("%Y-%m-%d"))
+                if pulls.get(day, 0) >= relay.pull_daily_cap:
+                    if day not in capped:
+                        capped.add(day)
+                        LOG.warning("%s: %d channel pulls today, push only until tomorrow", relay.name, pulls[day])
+                    continue
+                last_pull[relay.name] = time.monotonic()
+                pulls = {key: value for key, value in pulls.items() if key.endswith(day[-10:])}
+                pulls[day] = pulls.get(day, 0) + 1
+                try:
+                    latest = await self.client.get_messages(relay.channel_id, limit=1)
+                except FloodWaitError as exc:
+                    paused_until = time.time() + max(int(getattr(exc, "seconds", 0) or 0), 1800)
+                    LOG.warning("%s channel pull: flood wait %ss; push only for a while", relay.name,
+                                getattr(exc, "seconds", "?"))
+                    continue
+                except Exception:
+                    LOG.exception("%s channel pull failed", relay.name)
+                    continue
+                if not latest:
+                    continue
+                last = self.state.relay(relay.state_key)["channel_last_id"]
+                if last is not None and latest[0].id > last:
+                    LOG.info("%s channel post %s pulled (before or without its push)", relay.name, latest[0].id)
+                    await self.handle_channel(latest[0])
+
     async def _catch_up_loop(self) -> None:
         while True:
             await asyncio.sleep(self.catch_up_seconds)
@@ -795,6 +883,8 @@ class FacTelegramWatch:
                     % (relay.name, relay.name, "官方账号" if relay.staff else "管理员")
                 )
             tasks = [asyncio.ensure_future(self._catch_up_loop())]
+            if any(relay.alert_file for relay in self.relays):
+                tasks.append(asyncio.ensure_future(self._alert_loop()))
             if self.topic_groups:
                 tasks.append(asyncio.ensure_future(self._topic_digest_loop()))
             try:

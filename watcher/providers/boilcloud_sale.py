@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-from ..fac_trigger import post_trigger
+from ..fac_trigger import open_alert, post_trigger
 from ..models import Change, Product
 from .base import BaseProvider, FetchError, is_challenge_page
 from .boilcloud import BoilcloudProvider
@@ -46,6 +46,7 @@ class BoilcloudSaleProvider(BoilcloudProvider):
         self._new_pids: Dict[str, Product] = {}
         # Target cards (SeedNet) on public groups, kept between their reads.
         self._group_cards: Dict[str, Product] = {}
+        self._open_state: Dict[str, bool] = {}
         self._high_water = int(config.get("feed_start_pid") or 0)
         self._rounds = 0
         self._last_request: Optional[float] = None
@@ -102,6 +103,7 @@ class BoilcloudSaleProvider(BoilcloudProvider):
             products.append(
                 self._category_product(slug, url, bool(items), len(items), self._heading(text), listed)
             )
+            self._note_open(slug, bool(items))
         self._read_watch_groups()
         for key, item in self._group_cards.items():
             cards.setdefault(key, item)
@@ -141,6 +143,15 @@ class BoilcloudSaleProvider(BoilcloudProvider):
             "duration_seconds": round(time.monotonic() - started, 3),
         }
         return products
+
+    def _note_open(self, slug: str, is_open: bool) -> None:
+        """The sale page opened, or emptied / closed (2026-11-27: emptied at
+        16:30, the next blind box posted at 16:46): open an alert window."""
+        previous = self._open_state.get(slug)
+        self._open_state[slug] = is_open
+        if previous is not None and previous != is_open:
+            open_alert(self.config.get("alert_file"), "%s-%s" % (slug, "open" if is_open else "closed"),
+                       30, 5, hourly=True)
 
     # -- public groups (target cards only) -----------------------------------
 
