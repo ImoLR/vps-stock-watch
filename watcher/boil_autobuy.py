@@ -156,6 +156,9 @@ DEFAULTS: Dict[str, Any] = {
     # stock by a couple of seconds): opened again every second for this long,
     # if it may be a target (user, 2026-11-27).
     "rush_seconds": 60,
+    # An order the balance did not pay: its invoice is paid again every 10 s
+    # this long (no second order meanwhile), then given up.
+    "pay_retry_seconds": 120,
     "rush_spacing_seconds": 1.0,
     # The tunnel is down: straight from this host for this long.
     "direct_fallback_minutes": 10,
@@ -168,6 +171,12 @@ DEFAULTS: Dict[str, Any] = {
     "clearance_file": "data/boil_clearance.json",
     "clearance_timeout_seconds": 60,
     "clearance_check_minutes": 30,
+    # BOIL's clearance lasts 30 minutes (measured 2026-11-27: 6 min old ok,
+    # 30 and 36 min old challenged), so it is renewed before that: at this
+    # age normally, earlier while a sale may be near (alert window or links
+    # armed). About 50 Chromium runs a day, ~25 s each.
+    "clearance_renew_minutes": 27,
+    "clearance_renew_near_sale_minutes": 20,
     # Alert windows shared with the TG relay and the monitor (fac_trigger).
     "alert_file": "data/autobuy/boil_alert.json",
     # Hourly bursts (user, 2026-11-26). BOIL puts sale stock out on the hour:
@@ -209,6 +218,13 @@ PROMO = re.compile(
 OUT_OF_STOCK = re.compile(r"缺貨|缺货|售罄|out of stock", re.I)
 PAID = re.compile(r"\b(paid)\b|已付款", re.I)
 UNPAID = re.compile(r"\b(unpaid)\b|未付款", re.I)
+REFUNDED = re.compile(r"\b(refunded)\b|退款", re.I)
+CANCELLED = re.compile(r"\b(cancell?ed)\b|已取消", re.I)
+# After payment (user, 2026-11-27): BOIL takes stock only when an order is
+# paid, and even a paid order may get no machine (BOIL then refunds or
+# cancels it; the winners get an email). So a paid order is checked again.
+CONFIRM_CHECK_MINUTES = (3, 10, 30, 60, 180)
+LOST_SERVICE = ("cancelled", "terminated", "fraud")
 
 
 class OrderResult:
@@ -653,9 +669,28 @@ def invoice_status(page_html: str) -> str:
     text = " ".join((node.get_text(" ", strip=True) if node else "").split())
     if UNPAID.search(text):
         return "Unpaid"
+    if REFUNDED.search(text):
+        return "Refunded"
+    if CANCELLED.search(text):
+        return "Cancelled"
     if PAID.search(text):
         return "Paid"
     return text or "?"
+
+
+def service_rows(page_html: str) -> List[Tuple[int, str, str]]:
+    """clientarea.php?action=services: (service id, status, row text), where
+    status is the label's status-* class (active, pending, terminated ...)."""
+    rows = []
+    for row in BeautifulSoup(page_html, "lxml").select("table tbody tr"):
+        match = re.search(r"productdetails&(?:amp;)?id=(\d+)", str(row))
+        if not match:
+            continue
+        label = row.select_one(".status, .label")
+        classes = [str(value) for value in (label.get("class") or [])] if label else []
+        status = next((value[7:] for value in classes if value.startswith("status-")), "")
+        rows.append((int(match.group(1)), status, " ".join(row.get_text(" ", strip=True).split())))
+    return rows
 
 
 def _read_env(path: Path) -> Dict[str, str]:
@@ -695,6 +730,14 @@ class BoilAutoBuyer:
                 self.done[target["key"]] = json.loads(self.target_marker(target["key"]).read_text("utf-8"))
             except (OSError, ValueError):
                 pass
+        # Paid orders to re-check, and unpaid invoices still being paid.
+        self.followups: List[Dict[str, Any]] = []
+        self.pay_hold: Dict[str, float] = {}
+        now = time.time()
+        for key, record in self.done.items():
+            if record.get("state") == "paid":
+                times = [float(t) for t in record.get("check_at") or [] if float(t) > now] or [now]
+                self.followups.append({"kind": "confirm", "key": key, "times": times, "next": times[0]})
         self.trigger_dir = str(cfg["trigger_dir"])
         self.cookie_path = Path(str(cfg["cookie_file"]))
         account_file = Path(str(cfg["account_file"]))
@@ -966,6 +1009,14 @@ class BoilAutoBuyer:
                  " (the last one was %.0f min old)" % old_age if old_age is not None else "")
         return True
 
+    def renew_if_old(self, near_sale: bool = True) -> None:
+        """Renew the clearance before it runs out, not when buying."""
+        age = (time.time() - self.clearance_at) / 60 if self.clearance_at else None
+        limit = float(self.cfg["clearance_renew_near_sale_minutes" if near_sale else "clearance_renew_minutes"])
+        if age is not None and age > limit:
+            LOG.info("clearance %.0f min old%s: renewing it", age, " and a sale may be near" if near_sale else "")
+            self.refresh_clearance()
+
     def check_cart(self) -> None:
         """Open the cart page (renewing the clearance if Cloudflare asks) and
         empty it if anything is in it."""
@@ -1153,18 +1204,31 @@ class BoilAutoBuyer:
                 misses.append("%s：今日总价 $%.2f，折合每月 $%.2f" % (label, total, per_month))
                 self.empty_cart()
                 continue
-            if target.get("need_balance") and (balance is None or balance + 0.005 < total):
-                # Keep the link armed: it is bought once the user tops up.
+            # SeedNet first: while it is not bought, Japan/USA must leave
+            # enough to pay SeedNet's annual cap (nothing unpaid holds stock).
+            reserve = max((float(t["annual_only_month"]) * 12 for t in self.targets
+                           if t["key"] not in self.done and not t.get("need_balance")), default=0.0) \
+                if target.get("need_balance") else 0.0
+            if (balance is not None and balance + 0.005 < total + reserve) or (target.get("need_balance") and balance is None):
+                # BOIL takes stock only at payment: an order the balance can't
+                # pay holds nothing. Keep the link armed: bought once topped up.
                 key = "balance:%s" % pid
                 if key not in self.notified:
                     self.notified.add(key)
                     self.notify(
-                        "💰 <b>BOIL 抢购：%s 符合条件，但余额不够，没有下单</b>\n%s · %s：今日总价 $%.2f"
-                        "（每月 $%.2f），余额 %s\n%s 要余额全额付清才买（不占 SeedNet 的钱）；充值后程序会自己再试。\n%s"
+                        "💰 <b>BOIL 抢购：%s 符合条件，但余额不够全额付款，没有下单</b>\n%s · %s：今日总价 $%.2f"
+                        "（每月 $%.2f），余额 %s\nBOIL 付款成功才扣库存，付不了款的订单不算数；%s"
+                        "充值后程序会自己再试。\n%s"
                         % (html.escape(name), html.escape(target["label"]), html.escape(label), total, per_month,
-                           "$%.2f" % balance if balance is not None else "读不到", html.escape(target["label"]),
+                           "$%.2f" % balance if balance is not None else "读不到",
+                           ("日美要余额全额付清，而且付完还要留 $%.0f 给 SeedNet。" % reserve if reserve else
+                            "日美要余额全额付清才买。") if target.get("need_balance") else "",
                            html.escape(cart_link(self.base_url, pid)))
                     )
+                self.empty_cart()
+                return OrderResult.WAIT
+            if time.time() < self.pay_hold.get(target["key"], 0.0):
+                # An order for this target is still being paid: no second one.
                 self.empty_cart()
                 return OrderResult.WAIT
             if mode == "dry":
@@ -1234,6 +1298,9 @@ class BoilAutoBuyer:
 
     def record_order(self, pid: str, name: str, cycle_label: str, invoice: str,
                      total: float, balance: Optional[float], target: Dict[str, Any]) -> str:
+        """An order exists. Only a paid one counts (BOIL takes stock at payment):
+        pay it from the balance now; a paid order is then checked again until
+        BOIL opens the machine, or refunds / cancels it."""
         invoice_url = urljoin(self.base_url, "viewinvoice.php?id=%s" % invoice)
         status = invoice_status(self.request("GET", invoice_url).text)
         result = {
@@ -1241,33 +1308,57 @@ class BoilAutoBuyer:
             "invoice": invoice, "invoice_url": invoice_url, "invoice_status": status,
             "total": total, "balance_before": balance,
         }
-        # The order exists: write the marker before anything else can fail.
+        LOG.info("order created: %s", result)
+        title = "%s · %s · %s" % (html.escape(target["label"]), html.escape(name), html.escape(cycle_label))
+        why = ""
+        if status != "Paid":
+            self.notify(
+                "🛒 <b>BOIL 已下单，但还没付款成功</b>\n%s\n账单 #%s：%s，今日总价 $%.2f\n"
+                "BOIL 付款成功才扣库存，程序正在用余额付款，结果马上再发。你也可以直接上去付：%s"
+                % (title, invoice, html.escape(status), total, html.escape(invoice_url))
+            )
+            for _ in range(3):
+                why = self.pay_with_credit(invoice_url)
+                status = invoice_status(self.request("GET", invoice_url).text)
+                if status == "Paid":
+                    break
+            result.update(invoice_status=status, pay_attempt=why)
+        if status != "Paid":
+            # Not bought: an unpaid order holds nothing. Keep paying this
+            # invoice for a little while, without placing a second order.
+            hold = float(self.cfg["pay_retry_seconds"])
+            self.pay_hold[target["key"]] = time.time() + hold
+            self.followups.append({"kind": "pay", "key": target["key"], "record": result,
+                                   "next": time.time() + 10, "until": time.time() + hold})
+            self.notify(
+                "🚨 <b>BOIL 下单了，但余额付款没成功——没付款就不算抢到，请马上手动付款</b>\n%s\n账单 #%s：%s\n"
+                "原因：%s\n%s\n程序 %d 秒内每 10 秒再试一次余额付款，之后继续抢。"
+                % (title, invoice, html.escape(status), html.escape(why), html.escape(invoice_url), int(hold))
+            )
+            return OrderResult.WAIT
+        return self.paid(result, target)
+
+    def paid(self, result: Dict[str, Any], target: Dict[str, Any]) -> str:
+        """A paid order: counts as bought for now (the target pauses), and is
+        checked again after CONFIRM_CHECK_MINUTES."""
+        now = time.time()
+        times = [now + minutes * 60 for minutes in CONFIRM_CHECK_MINUTES]
+        result.update(state="paid", invoice_status="Paid", paid_at=_now_iso(), check_at=times)
+        self.pay_hold.pop(target["key"], None)
         marker = self.target_marker(target["key"])
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         self.done[target["key"]] = result
-        LOG.info("order created: %s", result)
-        title = "%s · %s · %s" % (html.escape(target["label"]), html.escape(name), html.escape(cycle_label))
-        if status != "Paid":
-            self.notify(
-                "🛒 <b>BOIL 已下单，但还没付清</b>\n%s\n账单 #%s：%s，今日总价 $%.2f\n"
-                "程序正在尝试用余额付款，结果马上再发。你也可以直接上去付：%s"
-                % (title, invoice, html.escape(status), total, html.escape(invoice_url))
-            )
-            why = self.pay_with_credit(invoice_url)
-            status = invoice_status(self.request("GET", invoice_url).text)
-            result.update(invoice_status=status, pay_attempt=why)
-            marker.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-        else:
-            why = ""
-        if status == "Paid":
-            self.notify("🎉 <b>BOIL 抢到了，已用余额付款</b>\n%s\n账单 #%s：已付款\n%s"
-                        % (title, invoice, html.escape(invoice_url)))
-        else:
-            self.notify(
-                "🚨 <b>BOIL 余额付款没成功，请马上手动付款</b>\n%s\n账单 #%s：%s\n原因：%s\n%s"
-                % (title, invoice, html.escape(status), html.escape(why), html.escape(invoice_url))
-            )
+        self.followups.append({"kind": "confirm", "key": target["key"], "times": times, "next": times[0]})
+        title = "%s · %s · %s" % (html.escape(target["label"]), html.escape(str(result["product"])),
+                                  html.escape(str(result["plan"])))
+        self.notify(
+            "💳 <b>BOIL 付款成功（余额）</b>\n%s\n账单 #%s：已付款，$%.2f\n%s\n"
+            "BOIL 要看付款时的库存：收到 BOIL 的确认邮件、机器开通，才算真正抢到。程序会在 %s 分钟后查订单状态；"
+            "BOIL 退款或取消的话会自动继续抢。"
+            % (title, result["invoice"], float(result["total"]), html.escape(str(result["invoice_url"])),
+               "、".join(str(m) for m in CONFIRM_CHECK_MINUTES))
+        )
         left = [t["label"] for t in self.targets if t["key"] not in self.done]
         if left:
             self.notify("👉 BOIL 抢购继续等：%s" % html.escape("、".join(left)))
@@ -1277,6 +1368,102 @@ class BoilAutoBuyer:
                 {"at": _now_iso(), "bought": self.done}, ensure_ascii=False, indent=2), encoding="utf-8")
             self.switch.bought(self.done_summary())
         return OrderResult.BOUGHT
+
+    def run_followups(self) -> None:
+        """Due re-checks of unpaid invoices and paid orders (also while paused)."""
+        now = time.time()
+        for item in list(self.followups):
+            if item["next"] > now or time.monotonic() < self.blocked_until:
+                continue
+            try:
+                if item["kind"] == "pay":
+                    self.follow_payment(item)
+                else:
+                    self.follow_confirm(item)
+            except BlockedError as exc:
+                self.blocked(exc)
+                return
+            except Exception:
+                LOG.exception("follow-up of %s failed", item.get("key"))
+                item["next"] = time.time() + 60
+
+    def follow_payment(self, item: Dict[str, Any]) -> None:
+        record = item["record"]
+        target = next(t for t in self.targets if t["key"] == item["key"])
+        status = invoice_status(self.request("GET", record["invoice_url"]).text)
+        if status == "Paid":
+            self.followups.remove(item)
+            self.paid(record, target)
+            return
+        if time.time() >= item["until"]:
+            self.followups.remove(item)
+            self.pay_hold.pop(item["key"], None)
+            self.notify("😶 <b>BOIL 账单 #%s 还是没付款成功（%s），程序放弃这张账单，继续抢</b>\n"
+                        "没付款就不算抢到。你要手动付的话：%s"
+                        % (record["invoice"], html.escape(status), html.escape(record["invoice_url"])))
+            return
+        record["pay_attempt"] = self.pay_with_credit(record["invoice_url"])
+        item["next"] = time.time() + 10
+
+    def follow_confirm(self, item: Dict[str, Any]) -> None:
+        key = item["key"]
+        record = self.done.get(key)
+        if record is None:
+            self.followups.remove(item)
+            return
+        status = invoice_status(self.request("GET", str(record["invoice_url"])).text)
+        rows = service_rows(self.request("GET", "clientarea.php?action=services").text)
+        service = None
+        if record.get("service_id"):
+            service = next((row for row in rows if row[0] == record["service_id"]), None)
+        else:
+            # The newest service whose line names this product.
+            named = [row for row in rows if str(record["product"]) in row[2]]
+            service = max(named) if named else None
+            if service is not None:
+                record["service_id"] = service[0]
+        service_status = service[1] if service else "?"
+        LOG.info("BOIL order %s: invoice %s, service %s", record["invoice"], status, service_status)
+        title = "%s · %s" % (html.escape(key), html.escape(str(record["product"])))
+        if status in ("Refunded", "Cancelled") or service_status in LOST_SERVICE:
+            self.followups.remove(item)
+            self.lost(key, record, "账单：%s，服务：%s" % (status, service_status))
+            return
+        if service_status == "active":
+            self.followups.remove(item)
+            record["state"] = "active"
+            self.target_marker(key).write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.notify("🎉 <b>BOIL 开通了：%s</b>\n账单 #%s 已付款，服务已开通（编号 %s）。再看一下有没有 BOIL 的确认邮件。"
+                        % (title, record["invoice"], record.get("service_id")))
+            return
+        item["times"] = [t for t in item["times"] if t > time.time()]
+        self.target_marker(key).write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        if item["times"]:
+            item["next"] = item["times"][0]
+            return
+        self.followups.remove(item)
+        self.notify("⏳ <b>BOIL 付款后 %d 分钟还没开通：%s</b>\n账单 #%s：%s，服务：%s。请看邮件：BOIL 只给抢到的人发确认邮件。"
+                    "没抢到（没邮件、被退款）的话，在 TG /autobuy 恢复，程序会继续抢。"
+                    % (CONFIRM_CHECK_MINUTES[-1], title, record["invoice"], html.escape(status), service_status))
+
+    def lost(self, key: str, record: Dict[str, Any], why: str) -> None:
+        """A paid order BOIL refunded or cancelled: not bought, buy again."""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        marker = self.target_marker(key)
+        record["state"] = "lost"
+        try:
+            marker.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(str(marker), str(marker.with_name("%s-lost-%s%s" % (marker.stem, stamp, marker.suffix))))
+        except OSError:
+            LOG.exception("cannot move %s aside", marker)
+        self.done.pop(key, None)
+        if self.marker_path.exists():
+            # Everything was bought (buyer paused): resume it.
+            self.switch.rearm()
+            self.switch.control.set(False, "")
+        self.notify("↩️ <b>BOIL 这单没抢到：%s · %s</b>\n%s。付了款但 BOIL 退款或取消了（库存不够）。程序继续抢：%s"
+                    % (html.escape(key), html.escape(str(record["product"])), html.escape(why),
+                       html.escape("、".join(t["label"] for t in self.targets if t["key"] not in self.done))))
 
     def pay_with_credit(self, invoice_url: str) -> str:
         """Best effort: WHMCS invoices offer "apply credit" when there is a balance."""
@@ -1434,13 +1621,27 @@ class BoilAutoBuyer:
         cfg = self.cfg
         open_alert(str(cfg["alert_file"]), "target-card-%s" % pid, 30, 5, hourly=True)
         LOG.info("target card %s (%s) in %s has no stock yet: hourly bursts on", pid, name, url)
+        # BOIL takes stock only at payment: is the balance enough to pay?
+        need = max((float(t["annual_only_month"]) * 12 for t in self.targets
+                    if t["key"] not in self.done and not t.get("need_balance")), default=0.0)
+        try:
+            balance = self.balance()
+        except BlockedError:
+            raise
+        except Exception:
+            LOG.exception("cannot read the balance")
+            balance = None
+        warn = ""
+        if balance is not None and balance + 0.005 < need:
+            warn = ("\n💰 余额 $%.2f，不够年付上限 $%.0f：BOIL 付款成功才扣库存，余额付不了就不会下单，请先充值。"
+                    % (balance, need))
         self.notify(
             "⏰ <b>BOIL 活动页出现目标商品，还没放货</b>：%s\n%s\n每个整点（%s 点，台湾时间）前 %d 秒到后 %d 秒"
-            "每 %g 秒看一次，有货马上下单；最长盯 %g 小时。"
+            "每 %g 秒看一次，有货马上下单；最长盯 %g 小时。%s"
             % (html.escape(name), html.escape(url),
                "%d–%d" % (min(cfg["burst_hours"]), max(cfg["burst_hours"])),
                int(cfg["burst_lead_seconds"]), int(cfg["burst_tail_seconds"]), float(cfg["burst_seconds"]),
-               float(cfg["burst_max_hours"]))
+               float(cfg["burst_max_hours"]), warn)
         )
 
     def bursting(self, url: str) -> bool:
@@ -1499,6 +1700,7 @@ class BoilAutoBuyer:
                     for entry in self.armed.values():
                         entry["next"] = time.monotonic() + 300
                     return False
+                self.renew_if_old()
                 if self.cart_dirty or time.monotonic() - self.last_cart_check > 300:
                     self.check_cart()
             if burst_open and (self.known_invoice is None or time.monotonic() - self.known_invoice[1] > fresh):
@@ -1618,6 +1820,7 @@ class BoilAutoBuyer:
         login_every = float(self.cfg["login_check_hours"]) * 3600
         try:
             while not self.stopping:
+                self.run_followups()
                 if self.switch.hold():
                     take_triggers(self.trigger_dir)  # a paused buyer ignores sightings
                     self.armed.clear()
@@ -1641,6 +1844,8 @@ class BoilAutoBuyer:
                                  str(trigger.get("text") or ""))
                     else:
                         LOG.info("trigger from %s arms nothing: %s", trigger.get("source"), trigger.get("urls"))
+                if time.monotonic() >= self.blocked_until:
+                    self.renew_if_old(near_sale=bool(self.armed) or alert_every(str(self.cfg["alert_file"])) is not None)
                 if self.armed:
                     if self.poll_armed():
                         continue

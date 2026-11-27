@@ -68,6 +68,14 @@ def invoice_page(status="Paid"):
     return '<html><body><div class="invoice-status"><span class="paid">%s</span></div></body></html>' % status
 
 
+def services_page(rows):
+    lines = "".join(
+        '<tr onclick="clickableSafeRedirect(event, \'clientarea.php?action=productdetails&id=%d\', false)">'
+        '<td>%s boilvps</td><td><span class="label status status-%s">x</span></td></tr>' % (sid, name, status)
+        for sid, status, name in rows)
+    return "<table><tbody>%s</tbody></table>" % lines
+
+
 def cart_view(items):
     if not items:
         return '<div class="view-cart-empty">您的購物車是空的</div>'
@@ -298,6 +306,7 @@ class FakeSite:
         self.calls = []
         self.festive_cards = festive_cards
         self.sold_out = False  # product links answer 缺貨中
+        self.services = []  # (id, status, name) on clientarea.php?action=services
         self.in_cart = 0
         self.cycles = cycles
         self.name, self.desc = name, desc
@@ -340,6 +349,8 @@ class FakeSite:
             return resp("".join('<a href="viewinvoice.php?id=%d">' % i for i in self.invoices))
         if "viewinvoice.php" in url:
             return resp(invoice_page(self.invoice_status), url)
+        if "action=services" in url:
+            return resp(services_page(self.services), url)
         if "clientarea.php" in url:
             return resp('<a href="logout.php">登出</a>', BASE + "clientarea.php")
         if "store/festive-offer" in url:
@@ -426,7 +437,8 @@ class BuyerTest(unittest.TestCase):
             marker = json.loads((Path(tmp) / "done_seednet.json").read_text("utf-8"))
             self.assertEqual((marker["target"], marker["invoice"], marker["invoice_status"]), ("seednet", "71", "Paid"))
             self.assertFalse((Path(tmp) / "done.json").exists())
-            self.assertIn("抢到了", buyer.sent[-2])
+            self.assertIn("付款成功", buyer.sent[-2])
+            self.assertIn("确认邮件", buyer.sent[-2])
             self.assertIn("继续等：日本/美國", buyer.sent[-1])
             self.assertIn(BASE + "store/festive-offer", buyer.armed)
             self.assertFalse(buyer.switch.control.paused())
@@ -465,15 +477,19 @@ class BuyerTest(unittest.TestCase):
             self.assertNotIn("600", buyer.price_dropped)
             buyer.order("600")
             self.assertEqual(len(buyer.sent), 1)  # told once
-            site.checkout = checkout_page(total="$468.00 USD", balance="$600.00 USD")
+            # Topped up enough to pay it and still keep SeedNet's $342.
+            site.checkout = checkout_page(total="$468.00 USD", balance="$810.00 USD")
             self.assertEqual(buyer.order("600"), ba.OrderResult.BOUGHT)
 
-    def test_seednet_is_ordered_even_if_the_balance_is_short(self):
+    def test_short_balance_places_no_order(self):
+        # BOIL takes stock only at payment: an order the balance can't pay holds nothing.
         with tempfile.TemporaryDirectory() as tmp:
-            site = FakeSite(checkout=checkout_page(total="$291.00 USD", balance="$100.00 USD"), invoice_status="Unpaid")
+            site = FakeSite(checkout=checkout_page(total="$291.00 USD", balance="$100.00 USD"))
             buyer = self.buyer(tmp, site)
-            self.assertEqual(buyer.order("540"), ba.OrderResult.BOUGHT)
-            self.assertIn("还没付清", buyer.sent[0])
+            self.assertEqual(buyer.order("540"), ba.OrderResult.WAIT)
+            self.assertIsNone(site.posted_checkout)
+            self.assertIn("余额不够全额付款", buyer.sent[0])
+            self.assertNotIn("seednet", buyer.done)
 
     def test_seednet_card_goes_before_japan_in_one_festive_group(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -621,7 +637,7 @@ class BuyerTest(unittest.TestCase):
             entry["next"] = 0
             buyer.poll_armed()
             self.assertIsNotNone(site.posted_checkout)
-            self.assertIn("抢到了", "".join(buyer.sent))
+            self.assertIn("付款成功", "".join(buyer.sent))
 
     def test_sold_out_tg_link_gives_up_after_the_rush(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -715,6 +731,52 @@ class BuyerTest(unittest.TestCase):
             with patch.object(buyer, "refresh_clearance", return_value=False):
                 with self.assertRaises(ba.BlockedError):
                     buyer.check_cart()
+
+    def test_target_card_warns_when_the_balance_cannot_pay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            buyer = self.buyer(tmp, FakeSite())
+            with patch.object(buyer, "balance", return_value=100.0):
+                buyer.presale_started("540", "2027 羊年 SeedNet", BASE + "store/festive-offer")
+            self.assertIn("余额 $100.00，不够年付上限 $342", buyer.sent[0])
+            with patch.object(buyer, "balance", return_value=600.0):
+                buyer.presale_started("541", "2027 羊年 SeedNet B", BASE + "store/festive-offer")
+            self.assertNotIn("余额", buyer.sent[1])
+
+    def test_japan_leaves_seednet_its_money(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # $480 Japan annual with $600: SeedNet ($342 cap) could no longer be paid.
+            site = FakeSite(name="2區 - SoftBank 1000Mbps VPS", desc="東京練馬・日本 動態 IP",
+                            cycles=[("annually", "$468.00 USD 年繳")],
+                            checkout=checkout_page(total="$468.00 USD", balance="$600.00 USD"))
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("311"), ba.OrderResult.WAIT)
+            self.assertIsNone(site.posted_checkout)
+            self.assertIn("留 $342 给 SeedNet", buyer.sent[0])
+            # SeedNet bought: Japan may use the balance.
+            buyer.done["seednet"] = {"product": "SeedNet"}
+            buyer.notified.clear()
+            self.assertEqual(buyer.order("311"), ba.OrderResult.BOUGHT)
+
+    def test_old_clearance_is_renewed_before_a_sale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            buyer = self.buyer(tmp, FakeSite())
+            buyer.clearance_at = time.time() - 25 * 60
+            with patch.object(buyer, "refresh_clearance", return_value=True) as refresh:
+                buyer.renew_if_old(near_sale=False)  # 25 min: still fine normally
+                refresh.assert_not_called()
+                buyer.renew_if_old()  # ... but not with a sale near
+                refresh.assert_called_once()
+                buyer.clearance_at = time.time() - 28 * 60
+                buyer.renew_if_old(near_sale=False)  # before the 30-min end
+                self.assertEqual(refresh.call_count, 2)
+
+    def test_invoice_and_service_status(self):
+        self.assertEqual(ba.invoice_status(invoice_page("已退款")), "Refunded")
+        self.assertEqual(ba.invoice_status(invoice_page("Cancelled")), "Cancelled")
+        self.assertEqual(ba.invoice_status(invoice_page("未付款")), "Unpaid")
+        self.assertEqual(ba.invoice_status(invoice_page("已付款")), "Paid")
+        rows = ba.service_rows(services_page([(4048, "active", "馬年專輯"), (4099, "terminated", "勞動777")]))
+        self.assertEqual([(sid, status) for sid, status, _ in rows], [(4048, "active"), (4099, "terminated")])
 
     def test_pac_sends_only_boil_and_the_challenge_host_through_the_tunnel(self):
         url = ba.pac_script(["cloud.boil.network", "challenges.cloudflare.com"], "socks5://127.0.0.1:1082")
@@ -822,14 +884,82 @@ class BuyerTest(unittest.TestCase):
             self.assertIsNone(site.posted_checkout)
             self.assertFalse((Path(tmp) / "done.json").exists())
 
-    def test_unpaid_invoice_sends_pay_link_first(self):
+    def test_unpaid_order_counts_only_once_paid(self):
         with tempfile.TemporaryDirectory() as tmp:
             site = FakeSite(invoice_status="Unpaid")
             buyer = self.buyer(tmp, site)
-            self.assertEqual(buyer.order("540"), ba.OrderResult.BOUGHT)
-            self.assertIn("还没付清", buyer.sent[0])
+            self.assertEqual(buyer.order("540"), ba.OrderResult.WAIT)
+            self.assertIn("还没付款成功", buyer.sent[0])
             self.assertIn("viewinvoice.php?id=71", buyer.sent[0])
-            self.assertIn("请马上手动付款", buyer.sent[-2])
+            self.assertIn("请马上手动付款", buyer.sent[-1])
+            self.assertNotIn("seednet", buyer.done)
+            self.assertFalse((Path(tmp) / "done_seednet.json").exists())
+            # No second order while this invoice is being paid.
+            checkouts = site.calls.count(("POST", BASE + "cart.php?a=checkout"))
+            self.assertEqual(buyer.order("540"), ba.OrderResult.WAIT)
+            self.assertEqual(site.calls.count(("POST", BASE + "cart.php?a=checkout")), checkouts)
+            # Paid on a retry: now it counts (and is checked again later).
+            site.invoice_status = "Paid"
+            buyer.followups[0]["next"] = 0
+            buyer.run_followups()
+            self.assertEqual(buyer.done["seednet"]["state"], "paid")
+            self.assertIn("付款成功", "".join(buyer.sent))
+            self.assertEqual([f["kind"] for f in buyer.followups], ["confirm"])
+
+    def test_unpaid_invoice_is_given_up_after_the_retries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite(invoice_status="Unpaid")
+            buyer = self.buyer(tmp, site)
+            buyer.order("540")
+            buyer.followups[0]["next"] = 0
+            buyer.followups[0]["until"] = 0
+            buyer.run_followups()
+            self.assertEqual(buyer.followups, [])
+            self.assertEqual(buyer.pay_hold, {})
+            self.assertIn("放弃这张账单", buyer.sent[-1])
+
+    def test_paid_order_is_confirmed_when_the_machine_is_up(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = FakeSite()
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("540"), ba.OrderResult.BOUGHT)
+            site.services = [(838, "active", "蛇年專輯 HiNet 120Mbps VPS"),
+                             (5001, "pending", "2027 羊年 SeedNet 300Mbps VPS")]
+            buyer.followups[0]["next"] = 0
+            buyer.run_followups()
+            self.assertEqual(buyer.done["seednet"]["service_id"], 5001)
+            self.assertEqual(len(buyer.followups), 1)  # still pending: checked again later
+            site.services[1] = (5001, "active", "2027 羊年 SeedNet 300Mbps VPS")
+            buyer.followups[0]["next"] = 0
+            buyer.run_followups()
+            self.assertEqual(buyer.followups, [])
+            self.assertIn("开通了", buyer.sent[-1])
+            marker = json.loads((Path(tmp) / "done_seednet.json").read_text("utf-8"))
+            self.assertEqual(marker["state"], "active")
+
+    def test_refunded_order_is_not_bought_and_the_buyer_goes_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "done_jpus.json").write_text(json.dumps({"product": "JP", "invoice": "60"}), "utf-8")
+            site = FakeSite()
+            buyer = self.buyer(tmp, site)
+            self.assertEqual(buyer.order("540"), ba.OrderResult.BOUGHT)
+            self.assertTrue(buyer.switch.control.paused())  # both kinds "bought"
+            site.invoice_status = "Refunded"
+            buyer.followups[0]["next"] = 0
+            buyer.run_followups()
+            self.assertNotIn("seednet", buyer.done)
+            self.assertFalse((Path(tmp) / "done_seednet.json").exists())
+            self.assertEqual(len(list(Path(tmp).glob("done_seednet-lost-*.json"))), 1)
+            self.assertFalse(buyer.switch.control.paused())  # back to buying
+            self.assertIn("没抢到", buyer.sent[-1])
+
+    def test_paid_orders_are_checked_again_after_a_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "done_seednet.json").write_text(json.dumps(
+                {"product": "SeedNet", "invoice": "71", "state": "paid", "check_at": [time.time() + 600],
+                 "invoice_url": BASE + "viewinvoice.php?id=71"}), "utf-8")
+            buyer = self.buyer(tmp, FakeSite())
+            self.assertEqual([(f["kind"], f["key"]) for f in buyer.followups], [("confirm", "seednet")])
 
     def test_out_of_stock_keeps_waiting(self):
         with tempfile.TemporaryDirectory() as tmp:
