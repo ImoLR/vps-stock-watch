@@ -56,11 +56,16 @@ class NnbProviderTests(unittest.TestCase):
         self.assertEqual(products["node-7-nic-2"].price, "¥22.00 CNY 起")
         self.assertFalse(products["node-7-nic-2"].available)
 
-    def test_rejects_malformed_and_empty_payloads(self):
+    def test_rejects_malformed_payloads(self):
         with self.assertRaises(ParseError):
             self.provider.parse_nodes({"code": 200, "data": {}})
         with self.assertRaises(ParseError):
-            self.provider.parse_nodes({"code": 200, "data": {"items": []}})
+            self.provider.parse_nodes({"code": 500, "data": {"items": []}})
+
+    def test_empty_list_between_sales_is_a_snapshot(self):
+        self.assertEqual(
+            self.provider.parse_nodes({"code": 200, "msg": "OK", "data": {"items": []}}), []
+        )
 
     def test_default_spec_is_node_minimum_with_free_tier_bandwidth(self):
         hk = node(7)

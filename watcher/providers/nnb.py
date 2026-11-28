@@ -39,8 +39,11 @@ class NnbProvider(BaseProvider):
             nics = [nic for nic in node.get("primary_nics") or [] if isinstance(nic, dict)]
             for nic in nics or [None]:
                 products.append(self._product(node, nic))
-        if not products:
-            raise ParseError("NewNB node list is empty; refusing an empty snapshot")
+        # NewNB takes every node off the list between sales (seen 2026-11-28),
+        # so an empty list from a successful reply is a real snapshot: the old
+        # nodes alert as removed and the next sale's nodes as new.
+        if not products and payload.get("code") != 200:
+            raise ParseError("NewNB node list is empty and code is %r" % payload.get("code"))
         return products
 
     def _product(self, node: Dict[str, Any], nic: Optional[Dict[str, Any]]) -> Product:
